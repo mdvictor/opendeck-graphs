@@ -47,6 +47,7 @@ pub enum MetricType {
     DiskWrite,
     DiskRead,
     RamUsage,
+    RamTemp,
     NetDownload,
     NetUpload,
 }
@@ -64,7 +65,8 @@ impl MetricType {
             | MetricType::CpuPackageTemp
             | MetricType::GpuTemp
             | MetricType::MotherboardTemp
-            | MetricType::NvmeTemp => 120.0,
+            | MetricType::NvmeTemp
+            | MetricType::RamTemp => 120.0,
             MetricType::CpuLoad | MetricType::GpuLoad | MetricType::RamUsage => 100.0,
             MetricType::CpuFan | MetricType::SystemFan => 3000.0,
             MetricType::CpuVoltage => 2.0,
@@ -80,6 +82,7 @@ impl MetricType {
             MetricType::GpuTemp => Some(85.0),
             MetricType::MotherboardTemp => Some(60.0),
             MetricType::NvmeTemp => Some(70.0),
+            MetricType::RamTemp => Some(85.0),
             _ => None,
         }
     }
@@ -99,6 +102,7 @@ impl MetricType {
             MetricType::DiskWrite => "Disk Write",
             MetricType::DiskRead => "Disk Read",
             MetricType::RamUsage => "RAM Usage",
+            MetricType::RamTemp => "RAM Temp",
             MetricType::NetDownload => "Net Down",
             MetricType::NetUpload => "Net Up",
         }
@@ -110,7 +114,8 @@ impl MetricType {
             | MetricType::CpuPackageTemp
             | MetricType::GpuTemp
             | MetricType::MotherboardTemp
-            | MetricType::NvmeTemp => "°C",
+            | MetricType::NvmeTemp
+            | MetricType::RamTemp => "°C",
             MetricType::CpuLoad | MetricType::GpuLoad | MetricType::RamUsage => "%",
             MetricType::CpuFan | MetricType::SystemFan => " RPM",
             MetricType::CpuVoltage => "V",
@@ -134,7 +139,6 @@ pub struct GraphSettings {
     pub websocket_url: Option<String>,
     pub websocket_api_key: Option<String>,
     pub websocket_init_messages: Vec<String>,
-    pub websocket_send_pings: bool,
 
     // Display settings
     pub show_value_text: bool,
@@ -169,7 +173,6 @@ impl GraphData {
     }
 
     fn get_graph_config(&self) -> GraphConfig {
-
         let normal_color = parse_hex_color(&self.settings.normal_color)
             .unwrap_or(ColorScheme::default().normal_color);
         let warning_color = parse_hex_color(&self.settings.warning_color)
@@ -183,19 +186,21 @@ impl GraphData {
 
         GraphConfig {
             data_points: self.data_points.iter().copied().collect(),
-            max_value: self.settings.max_value.unwrap_or_else(|| {
-                match self.settings.data_source {
+            max_value: self
+                .settings
+                .max_value
+                .unwrap_or_else(|| match self.settings.data_source {
                     DataSource::LmSensors => self.settings.metric_type.default_max(),
                     DataSource::WebSocket => 100.0,
-                }
-            }),
+                }),
             min_value: self.settings.min_value.unwrap_or(0.0),
-            threshold: self.settings.threshold.or_else(|| {
-                match self.settings.data_source {
+            threshold: self
+                .settings
+                .threshold
+                .or_else(|| match self.settings.data_source {
                     DataSource::LmSensors => self.settings.metric_type.default_threshold(),
                     DataSource::WebSocket => None,
-                }
-            }),
+                }),
             color_scheme: ColorScheme {
                 normal_color,
                 warning_color,
@@ -211,7 +216,6 @@ impl GraphData {
                     url: url.clone(),
                     api_key: self.settings.websocket_api_key.clone(),
                     init_messages: self.settings.websocket_init_messages.clone(),
-                    send_pings: self.settings.websocket_send_pings,
                 };
 
                 let client = Arc::new(WebSocketClient::new(config));
@@ -241,7 +245,10 @@ fn parse_hex_color(hex: &str) -> Option<image::Rgba<u8>> {
     Some(image::Rgba([r, g, b, 255]))
 }
 
-async fn read_sensor_value(settings: &GraphSettings, ws_client: Option<&Arc<WebSocketClient>>) -> Result<f32> {
+async fn read_sensor_value(
+    settings: &GraphSettings,
+    ws_client: Option<&Arc<WebSocketClient>>,
+) -> Result<f32> {
     match settings.data_source {
         DataSource::LmSensors => read_lm_sensors_value(settings).await,
         DataSource::WebSocket => {
@@ -262,9 +269,7 @@ async fn read_lm_sensors_value(settings: &GraphSettings) -> Result<f32> {
         MetricType::CpuLoad => sensors::find_cpu_load().await,
         MetricType::GpuTemp => sensors::find_gpu_temperature(None, None).await,
         MetricType::GpuLoad => sensors::find_gpu_load(None, None).await,
-        MetricType::MotherboardTemp => {
-            sensors::find_motherboard_temperature(None, None).await
-        }
+        MetricType::MotherboardTemp => sensors::find_motherboard_temperature(None, None).await,
         MetricType::NvmeTemp => sensors::find_nvme_temperature(None, None).await,
         MetricType::CpuFan => sensors::find_cpu_fan_speed(None, None).await,
         MetricType::SystemFan => sensors::find_system_fan_speed(None, None).await,
@@ -274,6 +279,7 @@ async fn read_lm_sensors_value(settings: &GraphSettings) -> Result<f32> {
         MetricType::RamUsage => sensors::find_ram_usage().await,
         MetricType::NetDownload => sensors::find_net_download().await,
         MetricType::NetUpload => sensors::find_net_upload().await,
+        MetricType::RamTemp => sensors::find_ram_temperature().await,
     }
 }
 
@@ -284,7 +290,11 @@ impl Action for GraphAction {
     const UUID: ActionUuid = "com.victormarin.graphs.action";
     type Settings = GraphSettings;
 
-    async fn will_appear(&self, instance: &Instance, settings: &Self::Settings) -> OpenActionResult<()> {
+    async fn will_appear(
+        &self,
+        instance: &Instance,
+        settings: &Self::Settings,
+    ) -> OpenActionResult<()> {
         let instance_id = instance.instance_id.clone();
         let mut instances = GRAPH_INSTANCES.lock().await;
 
@@ -299,7 +309,11 @@ impl Action for GraphAction {
         Ok(())
     }
 
-    async fn will_disappear(&self, instance: &Instance, _settings: &Self::Settings) -> OpenActionResult<()> {
+    async fn will_disappear(
+        &self,
+        instance: &Instance,
+        _settings: &Self::Settings,
+    ) -> OpenActionResult<()> {
         let instance_id = instance.instance_id.clone();
         let mut instances = GRAPH_INSTANCES.lock().await;
         instances.remove(&instance_id);
@@ -320,7 +334,8 @@ impl Action for GraphAction {
             graph_data.settings = settings.clone();
 
             // Reinitialize WebSocket if source changed to WebSocket
-            if settings.data_source == DataSource::WebSocket && old_source != DataSource::WebSocket {
+            if settings.data_source == DataSource::WebSocket && old_source != DataSource::WebSocket
+            {
                 if let Err(e) = graph_data.initialize_websocket().await {
                     log::error!("Failed to initialize WebSocket: {}", e);
                 }
@@ -356,7 +371,9 @@ pub async fn start_sensor_monitoring() {
                         // Prepare title text before dropping instances
                         let title_option = if graph_data.settings.show_value_text {
                             let suffix = match graph_data.settings.data_source {
-                                DataSource::LmSensors => graph_data.settings.metric_type.value_suffix(),
+                                DataSource::LmSensors => {
+                                    graph_data.settings.metric_type.value_suffix()
+                                }
                                 DataSource::WebSocket => "",
                             };
                             Some(format!("{:.1}{}", value, suffix))

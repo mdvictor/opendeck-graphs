@@ -38,9 +38,7 @@
                 const websocketUrl = document.getElementById("websocket_url");
                 const websocketApiKey =
                     document.getElementById("websocket_api_key");
-                const websocketSendPings = document.getElementById(
-                    "websocket_send_pings",
-                );
+
                 const initMessagesContainer = document.getElementById(
                     "init_messages_container",
                 );
@@ -56,8 +54,6 @@
                 minValue.value = settings.min_value ?? "";
                 websocketUrl.value = settings.websocket_url || "";
                 websocketApiKey.value = settings.websocket_api_key || "";
-                websocketSendPings.checked =
-                    settings.websocket_send_pings ?? true;
 
                 // Initialize init messages
                 const initMessages = settings.websocket_init_messages || [];
@@ -80,8 +76,6 @@
                         minValue.value = s.min_value ?? "";
                         websocketUrl.value = s.websocket_url || "";
                         websocketApiKey.value = s.websocket_api_key || "";
-                        websocketSendPings.checked =
-                            s.websocket_send_pings ?? true;
 
                         const msgs = s.websocket_init_messages || [];
                         renderInitMessages(msgs);
@@ -162,8 +156,6 @@
                         if (websocketApiKey.value) {
                             settings.websocket_api_key = websocketApiKey.value;
                         }
-                        settings.websocket_send_pings =
-                            websocketSendPings.checked;
 
                         // Collect init messages
                         const initMsgs = [];
@@ -335,6 +327,7 @@
                     <option value="diskwrite">Disk Write</option>
                     <option value="diskread">Disk Read</option>
                     <option value="ramusage">RAM Usage</option>
+                    <option value="ramtemp">RAM Temperature</option>
                     <option value="netdownload">Network Download</option>
                     <option value="netupload">Network Upload</option>
                 </select>
@@ -369,17 +362,6 @@
                 <button class="btn-add" onclick="addInitMessage()">
                     + Add Message
                 </button>
-            </div>
-
-            <div class="field checkbox-field">
-                <input
-                    id="websocket_send_pings"
-                    type="checkbox"
-                    oninput="update();"
-                />
-                <label for="websocket_send_pings"
-                    >Send Ping Messages (every 4s)</label
-                >
             </div>
         </div>
 

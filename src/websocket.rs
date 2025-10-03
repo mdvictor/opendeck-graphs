@@ -3,7 +3,8 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio::time::{interval, Duration};
+use tokio::time::Duration;
+use tokio_tungstenite::tungstenite::http::Request;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 /// WebSocket data source configuration
@@ -12,23 +13,19 @@ pub struct WebSocketConfig {
     pub url: String,
     pub api_key: Option<String>,
     pub init_messages: Vec<String>,
-    pub send_pings: bool,
 }
 
 /// WebSocket data source client
 pub struct WebSocketClient {
     config: WebSocketConfig,
     current_value: Arc<Mutex<f32>>,
-    ping_id: Arc<Mutex<u64>>,
 }
 
 impl WebSocketClient {
     pub fn new(config: WebSocketConfig) -> Self {
-        let initial_ping_id = config.init_messages.len() as u64;
         Self {
             config,
             current_value: Arc::new(Mutex::new(0.0)),
-            ping_id: Arc::new(Mutex::new(initial_ping_id)),
         }
     }
 
@@ -36,10 +33,9 @@ impl WebSocketClient {
     pub async fn start(&self) -> Result<()> {
         let config = self.config.clone();
         let current_value = self.current_value.clone();
-        let ping_id = self.ping_id.clone();
 
         tokio::spawn(async move {
-            if let Err(e) = Self::run_connection(config, current_value, ping_id).await {
+            if let Err(e) = Self::run_connection(config, current_value).await {
                 log::error!("WebSocket connection error: {}", e);
             }
         });
@@ -52,13 +48,9 @@ impl WebSocketClient {
         *self.current_value.lock().await
     }
 
-    async fn run_connection(
-        config: WebSocketConfig,
-        current_value: Arc<Mutex<f32>>,
-        ping_id: Arc<Mutex<u64>>,
-    ) -> Result<()> {
+    async fn run_connection(config: WebSocketConfig, current_value: Arc<Mutex<f32>>) -> Result<()> {
         loop {
-            match Self::connect_and_run(&config, &current_value, &ping_id).await {
+            match Self::connect_and_run(&config, &current_value).await {
                 Ok(_) => {
                     log::info!("WebSocket connection closed, reconnecting in 5 seconds...");
                 }
@@ -73,21 +65,40 @@ impl WebSocketClient {
     async fn connect_and_run(
         config: &WebSocketConfig,
         current_value: &Arc<Mutex<f32>>,
-        ping_id: &Arc<Mutex<u64>>,
     ) -> Result<()> {
-        // Build URL with API key if provided
-        let url = if let Some(api_key) = &config.api_key {
-            if config.url.contains('?') {
-                format!("{}&apikey={}", config.url, api_key)
-            } else {
-                format!("{}?apikey={}", config.url, api_key)
-            }
+        log::info!("Connecting to WebSocket: {}", config.url);
+
+        // Build request with Authorization header if API key is provided
+        let ws_stream = if let Some(api_key) = &config.api_key {
+            let request = Request::builder()
+                .uri(&config.url)
+                .header(
+                    "Host",
+                    config
+                        .url
+                        .split("//")
+                        .nth(1)
+                        .unwrap_or("")
+                        .split('/')
+                        .next()
+                        .unwrap_or(""),
+                )
+                .header("Connection", "Upgrade")
+                .header("Upgrade", "websocket")
+                .header("Sec-WebSocket-Version", "13")
+                .header(
+                    "Sec-WebSocket-Key",
+                    tokio_tungstenite::tungstenite::handshake::client::generate_key(),
+                )
+                .header("Authorization", format!("Bearer {}", api_key))
+                .body(())?;
+            let (ws_stream, _) = connect_async(request).await?;
+            ws_stream
         } else {
-            config.url.clone()
+            let (ws_stream, _) = connect_async(&config.url).await?;
+            ws_stream
         };
 
-        log::info!("Connecting to WebSocket: {}", url);
-        let (ws_stream, _) = connect_async(&url).await?;
         let (write, mut read) = ws_stream.split();
 
         // Wrap write in Arc<Mutex<>> for sharing between tasks
@@ -98,7 +109,11 @@ impl WebSocketClient {
         // Send initialization messages and wait for responses
         for (idx, init_msg) in config.init_messages.iter().enumerate() {
             log::debug!("Sending init message {}: {}", idx + 1, init_msg);
-            write.lock().await.send(Message::Text(init_msg.clone())).await?;
+            write
+                .lock()
+                .await
+                .send(Message::Text(init_msg.clone()))
+                .await?;
 
             // Wait for response
             if let Some(response) = read.next().await {
@@ -119,31 +134,6 @@ impl WebSocketClient {
 
         log::info!("Initialization complete, starting data loop");
 
-        // Start ping task if enabled
-        let ping_handle = if config.send_pings {
-            let write_clone = write.clone();
-            let ping_id_clone = ping_id.clone();
-            Some(tokio::spawn(async move {
-                let mut ping_interval = interval(Duration::from_secs(4));
-                loop {
-                    ping_interval.tick().await;
-                    let mut id = ping_id_clone.lock().await;
-                    let ping_msg = format!(r#"{{"ping":{{}},"id":{}}}"#, *id);
-                    *id += 1;
-                    drop(id);
-
-                    log::debug!("Sending ping: {}", ping_msg);
-                    if let Err(e) = write_clone.lock().await.send(Message::Text(ping_msg)).await {
-                        log::error!("Failed to send ping: {}", e);
-                        break;
-                    }
-                }
-            }))
-        } else {
-            None
-        };
-
-        // Read data messages
         while let Some(message) = read.next().await {
             match message {
                 Ok(Message::Text(text)) => {
@@ -167,11 +157,6 @@ impl WebSocketClient {
                 }
                 _ => {}
             }
-        }
-
-        // Abort ping task if running
-        if let Some(handle) = ping_handle {
-            handle.abort();
         }
 
         Ok(())

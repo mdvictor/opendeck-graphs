@@ -1,7 +1,7 @@
 use anyhow::Result;
 use lm_sensors as sensors;
 use std::sync::Mutex;
-use sysinfo::{System, Networks, Disks};
+use sysinfo::{Components, Disks, Networks, System};
 
 static PREV_CPU_STATS: Mutex<Option<(u64, u64)>> = Mutex::new(None);
 static PREV_DISK_WRITE: Mutex<Option<u64>> = Mutex::new(None);
@@ -66,6 +66,24 @@ pub async fn find_ram_usage() -> Result<f32> {
     } else {
         Ok(0.0)
     }
+}
+
+/// Find RAM temperature from sysinfo
+pub async fn find_ram_temperature() -> Result<f32> {
+    let components = Components::new_with_refreshed_list();
+
+    for component in &components {
+        let label = component.label();
+        // Look for SPD5118 or other RAM temperature sensors
+        if label.contains("spd5118") || label.contains("SPD5118") {
+            if let Some(temp) = component.temperature() {
+                return Ok(temp);
+            }
+        }
+    }
+
+    log::warn!("RAM temperature sensor not found");
+    Ok(0.0)
 }
 
 /// Find disk write speed in MB/s
@@ -154,7 +172,10 @@ pub async fn find_net_upload() -> Result<f32> {
     Ok(upload_speed)
 }
 /// Find CPU temperature from lm-sensors
-pub async fn find_cpu_temperature(sensor_chip: Option<&str>, sensor_feature: Option<&str>) -> Result<f32> {
+pub async fn find_cpu_temperature(
+    sensor_chip: Option<&str>,
+    sensor_feature: Option<&str>,
+) -> Result<f32> {
     let sensors_lib = sensors::Initializer::default().initialize()?;
 
     // Check for custom sensor first
@@ -183,7 +204,10 @@ pub async fn find_cpu_temperature(sensor_chip: Option<&str>, sensor_feature: Opt
         if chip_name.contains("coretemp") || chip_name.contains("k10temp") {
             for feature in chip.feature_iter() {
                 if let Ok(label) = feature.label() {
-                    if label.contains("Package") || label.contains("Tdie") || label.contains("Core 0") {
+                    if label.contains("Package")
+                        || label.contains("Tdie")
+                        || label.contains("Core 0")
+                    {
                         for sub_feature in feature.sub_feature_iter() {
                             if let Ok(value) = sub_feature.value() {
                                 return Ok(value.raw_value() as f32);
@@ -239,11 +263,15 @@ pub async fn find_gpu_load(sensor_chip: Option<&str>, sensor_feature: Option<&st
         }
     }
 
+    log::warn!("GPU load sensor not found");
     Ok(0.0)
 }
 
 /// Find GPU temperature from lm-sensors
-pub async fn find_gpu_temperature(sensor_chip: Option<&str>, sensor_feature: Option<&str>) -> Result<f32> {
+pub async fn find_gpu_temperature(
+    sensor_chip: Option<&str>,
+    sensor_feature: Option<&str>,
+) -> Result<f32> {
     let sensors_lib = sensors::Initializer::default().initialize()?;
 
     // Check for custom sensor first
@@ -287,7 +315,10 @@ pub async fn find_gpu_temperature(sensor_chip: Option<&str>, sensor_feature: Opt
 }
 
 /// Find motherboard temperature from lm-sensors
-pub async fn find_motherboard_temperature(sensor_chip: Option<&str>, sensor_feature: Option<&str>) -> Result<f32> {
+pub async fn find_motherboard_temperature(
+    sensor_chip: Option<&str>,
+    sensor_feature: Option<&str>,
+) -> Result<f32> {
     let sensors_lib = sensors::Initializer::default().initialize()?;
 
     // Check for custom sensor first
@@ -331,7 +362,10 @@ pub async fn find_motherboard_temperature(sensor_chip: Option<&str>, sensor_feat
 }
 
 /// Find NVMe temperature from lm-sensors
-pub async fn find_nvme_temperature(sensor_chip: Option<&str>, sensor_feature: Option<&str>) -> Result<f32> {
+pub async fn find_nvme_temperature(
+    sensor_chip: Option<&str>,
+    sensor_feature: Option<&str>,
+) -> Result<f32> {
     let sensors_lib = sensors::Initializer::default().initialize()?;
 
     // Check for custom sensor first
@@ -371,7 +405,10 @@ pub async fn find_nvme_temperature(sensor_chip: Option<&str>, sensor_feature: Op
 }
 
 /// Find CPU fan speed from lm-sensors
-pub async fn find_cpu_fan_speed(sensor_chip: Option<&str>, sensor_feature: Option<&str>) -> Result<f32> {
+pub async fn find_cpu_fan_speed(
+    sensor_chip: Option<&str>,
+    sensor_feature: Option<&str>,
+) -> Result<f32> {
     let sensors_lib = sensors::Initializer::default().initialize()?;
 
     // Check for custom sensor first
@@ -412,7 +449,10 @@ pub async fn find_cpu_fan_speed(sensor_chip: Option<&str>, sensor_feature: Optio
 }
 
 /// Find system fan speed from lm-sensors
-pub async fn find_system_fan_speed(sensor_chip: Option<&str>, sensor_feature: Option<&str>) -> Result<f32> {
+pub async fn find_system_fan_speed(
+    sensor_chip: Option<&str>,
+    sensor_feature: Option<&str>,
+) -> Result<f32> {
     let sensors_lib = sensors::Initializer::default().initialize()?;
 
     // Check for custom sensor first
@@ -453,7 +493,10 @@ pub async fn find_system_fan_speed(sensor_chip: Option<&str>, sensor_feature: Op
 }
 
 /// Find CPU voltage from lm-sensors
-pub async fn find_cpu_voltage(sensor_chip: Option<&str>, sensor_feature: Option<&str>) -> Result<f32> {
+pub async fn find_cpu_voltage(
+    sensor_chip: Option<&str>,
+    sensor_feature: Option<&str>,
+) -> Result<f32> {
     let sensors_lib = sensors::Initializer::default().initialize()?;
 
     // Check for custom sensor first
