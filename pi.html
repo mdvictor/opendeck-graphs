@@ -1,0 +1,451 @@
+<!doctype html>
+<html>
+    <head>
+        <script>
+            let update = () => {};
+            function connectOpenActionSocket(
+                inPort,
+                inPropertyInspectorUUID,
+                inRegisterEvent,
+                inInfo,
+                inActionInfo,
+            ) {
+                const websocket = new WebSocket("ws://localhost:" + inPort);
+                inActionInfo = JSON.parse(inActionInfo);
+                websocket.onopen = () => {
+                    websocket.send(
+                        JSON.stringify({
+                            event: inRegisterEvent,
+                            uuid: inPropertyInspectorUUID,
+                        }),
+                    );
+                };
+
+                // Get elements
+                const dataSource = document.getElementById("data_source");
+                const lmSensorsSection =
+                    document.getElementById("lmsensors_section");
+                const websocketSection =
+                    document.getElementById("websocket_section");
+                const metricType = document.getElementById("metric_type");
+                const showValueText =
+                    document.getElementById("show_value_text");
+                const threshold = document.getElementById("threshold");
+                const normalColor = document.getElementById("normal_color");
+                const warningColor = document.getElementById("warning_color");
+                const maxValue = document.getElementById("max_value");
+                const minValue = document.getElementById("min_value");
+                const websocketUrl = document.getElementById("websocket_url");
+                const websocketApiKey =
+                    document.getElementById("websocket_api_key");
+                const websocketSendPings = document.getElementById(
+                    "websocket_send_pings",
+                );
+                const initMessagesContainer = document.getElementById(
+                    "init_messages_container",
+                );
+
+                // Set default values from settings
+                const settings = inActionInfo.payload.settings || {};
+                dataSource.value = settings.data_source || "lmsensors";
+                metricType.value = settings.metric_type || "cputemp";
+                showValueText.checked = settings.show_value_text ?? false;
+                normalColor.value = settings.normal_color || "#00ff00";
+                warningColor.value = settings.warning_color || "#ff0000";
+                maxValue.value = settings.max_value ?? "";
+                minValue.value = settings.min_value ?? "";
+                websocketUrl.value = settings.websocket_url || "";
+                websocketApiKey.value = settings.websocket_api_key || "";
+                websocketSendPings.checked =
+                    settings.websocket_send_pings ?? true;
+
+                // Initialize init messages
+                const initMessages = settings.websocket_init_messages || [];
+                renderInitMessages(initMessages);
+
+                // Show/hide sections based on data source
+                toggleDataSourceSections();
+
+                websocket.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    if (data.event == "didReceiveSettings") {
+                        const s = data.payload.settings || {};
+                        dataSource.value = s.data_source || "lmsensors";
+                        metricType.value = s.metric_type || "cputemp";
+                        showValueText.checked = s.show_value_text ?? false;
+                        threshold.value = s.threshold ?? "";
+                        normalColor.value = s.normal_color || "#00ff00";
+                        warningColor.value = s.warning_color || "#ff0000";
+                        maxValue.value = s.max_value ?? "";
+                        minValue.value = s.min_value ?? "";
+                        websocketUrl.value = s.websocket_url || "";
+                        websocketApiKey.value = s.websocket_api_key || "";
+                        websocketSendPings.checked =
+                            s.websocket_send_pings ?? true;
+
+                        const msgs = s.websocket_init_messages || [];
+                        renderInitMessages(msgs);
+                        toggleDataSourceSections();
+                    }
+                };
+
+                function toggleDataSourceSections() {
+                    if (dataSource.value === "lmsensors") {
+                        lmSensorsSection.style.display = "block";
+                        websocketSection.style.display = "none";
+                    } else {
+                        lmSensorsSection.style.display = "none";
+                        websocketSection.style.display = "block";
+                    }
+                }
+
+                function renderInitMessages(messages) {
+                    initMessagesContainer.innerHTML = "";
+                    if (messages.length === 0) {
+                        addInitMessageField("");
+                    } else {
+                        messages.forEach((msg) => addInitMessageField(msg));
+                    }
+                }
+
+                function addInitMessageField(value) {
+                    const field = document.createElement("div");
+                    field.className = "init-message-field";
+
+                    const textarea = document.createElement("textarea");
+                    textarea.className = "init-message-input";
+                    textarea.value = value;
+                    textarea.placeholder = "Enter init message (JSON)";
+                    textarea.oninput = update;
+
+                    const removeBtn = document.createElement("button");
+                    removeBtn.textContent = "−";
+                    removeBtn.className = "btn-remove";
+                    removeBtn.onclick = () => {
+                        field.remove();
+                        update();
+                    };
+
+                    field.appendChild(textarea);
+                    field.appendChild(removeBtn);
+                    initMessagesContainer.appendChild(field);
+                }
+
+                window.addInitMessage = () => {
+                    addInitMessageField("");
+                    update();
+                };
+
+                window.dataSourceChanged = () => {
+                    toggleDataSourceSections();
+                    update();
+                };
+
+                update = () => {
+                    const settings = {
+                        data_source: dataSource.value,
+                        show_value_text: showValueText.checked,
+                        normal_color: normalColor.value,
+                        warning_color: warningColor.value,
+                    };
+
+                    // LM Sensors settings
+                    if (dataSource.value === "lmsensors") {
+                        settings.metric_type = metricType.value;
+                    }
+
+                    // WebSocket settings
+                    if (dataSource.value === "websocket") {
+                        if (websocketUrl.value) {
+                            settings.websocket_url = websocketUrl.value;
+                        }
+                        if (websocketApiKey.value) {
+                            settings.websocket_api_key = websocketApiKey.value;
+                        }
+                        settings.websocket_send_pings =
+                            websocketSendPings.checked;
+
+                        // Collect init messages
+                        const initMsgs = [];
+                        document
+                            .querySelectorAll(".init-message-input")
+                            .forEach((input) => {
+                                if (input.value.trim()) {
+                                    initMsgs.push(input.value.trim());
+                                }
+                            });
+                        settings.websocket_init_messages = initMsgs;
+                    }
+
+                    // Common settings
+                    if (threshold.value) {
+                        settings.threshold = parseFloat(threshold.value);
+                    }
+                    if (maxValue.value) {
+                        settings.max_value = parseFloat(maxValue.value);
+                    }
+                    if (minValue.value) {
+                        settings.min_value = parseFloat(minValue.value);
+                    }
+
+                    websocket.send(
+                        JSON.stringify({
+                            event: "setSettings",
+                            context: inActionInfo.context,
+                            payload: settings,
+                        }),
+                    );
+                };
+            }
+            const connectElgatoStreamDeckSocket = connectOpenActionSocket;
+        </script>
+        <style>
+            * {
+                font-family: system-ui, sans-serif;
+                font-size: 14px;
+                color: oklch(92.2% 0 0);
+            }
+            body {
+                margin: 16px;
+                background-color: oklch(20.5% 0 0);
+            }
+            .field {
+                margin-bottom: 16px;
+            }
+            label {
+                display: block;
+                margin-bottom: 4px;
+                font-weight: 500;
+            }
+            input[type="text"],
+            input[type="number"],
+            select,
+            textarea {
+                width: 100%;
+                padding: 8px;
+                background-color: oklch(30% 0 0);
+                border: 1px solid oklch(40% 0 0);
+                border-radius: 4px;
+                color: oklch(92.2% 0 0);
+                box-sizing: border-box;
+            }
+            textarea {
+                resize: vertical;
+                min-height: 60px;
+                font-family: monospace;
+            }
+            input[type="checkbox"] {
+                width: 20px;
+                height: 20px;
+                cursor: pointer;
+            }
+            input[type="color"] {
+                width: 100%;
+                height: 40px;
+                padding: 4px;
+                background-color: oklch(30% 0 0);
+                border: 1px solid oklch(40% 0 0);
+                border-radius: 4px;
+                cursor: pointer;
+            }
+            .checkbox-field {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+            .checkbox-field label {
+                margin: 0;
+            }
+            .section-title {
+                font-size: 16px;
+                font-weight: 600;
+                margin-top: 20px;
+                margin-bottom: 12px;
+                padding-bottom: 6px;
+                border-bottom: 1px solid oklch(40% 0 0);
+            }
+            .help-text {
+                font-size: 12px;
+                color: oklch(70% 0 0);
+                margin-top: 4px;
+            }
+            .init-message-field {
+                display: flex;
+                gap: 8px;
+                margin-bottom: 8px;
+                align-items: flex-start;
+            }
+            .init-message-input {
+                flex: 1;
+            }
+            .btn-remove,
+            .btn-add {
+                padding: 8px 12px;
+                background-color: oklch(35% 0 0);
+                border: 1px solid oklch(45% 0 0);
+                border-radius: 4px;
+                cursor: pointer;
+                color: oklch(92.2% 0 0);
+                font-weight: bold;
+            }
+            .btn-remove {
+                width: 32px;
+                height: 32px;
+                padding: 0;
+                margin-top: 0;
+            }
+            .btn-add {
+                width: 100%;
+                margin-top: 8px;
+            }
+            .btn-remove:hover,
+            .btn-add:hover {
+                background-color: oklch(40% 0 0);
+            }
+        </style>
+    </head>
+    <body>
+        <div class="field">
+            <label for="data_source">Data Source:</label>
+            <select id="data_source" onchange="dataSourceChanged();">
+                <option value="lmsensors">LM Sensors</option>
+                <option value="websocket">WebSocket</option>
+            </select>
+        </div>
+
+        <!-- LM Sensors Section -->
+        <div id="lmsensors_section">
+            <div class="field">
+                <label for="metric_type">Metric Type:</label>
+                <select id="metric_type" oninput="update();">
+                    <option value="cputemp">CPU Temperature</option>
+                    <option value="cpupackagetemp">
+                        CPU Package Temperature
+                    </option>
+                    <option value="cpuload">CPU Load</option>
+                    <option value="gputemp">GPU Temperature</option>
+                    <option value="gpuload">GPU Load</option>
+                    <option value="motherboardtemp">
+                        Motherboard Temperature
+                    </option>
+                    <option value="nvmetemp">NVMe Temperature</option>
+                    <option value="cpufan">CPU Fan Speed</option>
+                    <option value="systemfan">System Fan Speed</option>
+                    <option value="cpuvoltage">CPU Voltage</option>
+                    <option value="diskwrite">Disk Write</option>
+                    <option value="diskread">Disk Read</option>
+                    <option value="ramusage">RAM Usage</option>
+                    <option value="netdownload">Network Download</option>
+                    <option value="netupload">Network Upload</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- WebSocket Section -->
+        <div id="websocket_section" style="display: none">
+            <div class="field">
+                <label for="websocket_url">WebSocket URL:</label>
+                <input
+                    type="text"
+                    id="websocket_url"
+                    placeholder="ws://localhost:8080"
+                    oninput="update();"
+                />
+            </div>
+
+            <div class="field">
+                <label for="websocket_api_key">API Key (Optional):</label>
+                <input
+                    type="text"
+                    id="websocket_api_key"
+                    placeholder="Enter API key"
+                    oninput="update();"
+                />
+            </div>
+
+            <div class="field">
+                <label>Init Messages:</label>
+                <div id="init_messages_container"></div>
+                <button class="btn-add" onclick="addInitMessage()">
+                    + Add Message
+                </button>
+            </div>
+
+            <div class="field checkbox-field">
+                <input
+                    id="websocket_send_pings"
+                    type="checkbox"
+                    oninput="update();"
+                />
+                <label for="websocket_send_pings"
+                    >Send Ping Messages (every 4s)</label
+                >
+            </div>
+        </div>
+
+        <!-- Display Settings -->
+        <div class="section-title">Display Settings</div>
+        <div class="field checkbox-field">
+            <input id="show_value_text" type="checkbox" oninput="update();" />
+            <label for="show_value_text">Show Current Value</label>
+        </div>
+
+        <!-- Graph Settings -->
+        <div class="section-title">Graph Settings</div>
+        <div class="field">
+            <label for="threshold">Warning Threshold:</label>
+            <input
+                type="number"
+                id="threshold"
+                placeholder="Auto (e.g., 80 for CPU temp)"
+                step="0.1"
+                oninput="update();"
+            />
+            <div class="help-text">
+                Graph turns warning color when value exceeds threshold
+            </div>
+        </div>
+
+        <div class="field">
+            <label for="normal_color">Normal Color:</label>
+            <input
+                type="color"
+                id="normal_color"
+                value="#00ff00"
+                oninput="update();"
+            />
+        </div>
+
+        <div class="field">
+            <label for="warning_color">Warning Color:</label>
+            <input
+                type="color"
+                id="warning_color"
+                value="#ff0000"
+                oninput="update();"
+            />
+        </div>
+
+        <div class="field">
+            <label for="min_value">Min Value:</label>
+            <input
+                type="number"
+                id="min_value"
+                placeholder="Auto (0)"
+                step="0.1"
+                oninput="update();"
+            />
+        </div>
+
+        <div class="field">
+            <label for="max_value">Max Value:</label>
+            <input
+                type="number"
+                id="max_value"
+                placeholder="Auto (based on metric type)"
+                step="0.1"
+                oninput="update();"
+            />
+        </div>
+    </body>
+</html>

@@ -1,0 +1,21 @@
+{
+  "Name": "Hardware Graphs",
+  "Author": "Victor Marin",
+  "Version": "1.0.0",
+  "CodePathLin": "graphs",
+  "OS": [{ "Platform": "linux" }],
+  "Category": "Graphs",
+  "CategoryIcon": "INSERT_IMAGE",
+  "Description": "Display hardware metrics as timeseries graphs on your Stream Deck",
+  "Icon": "imgs/marketplace",
+  "PropertyInspectorPath": "pi.html",
+  "Actions": [
+    {
+      "Icon": "CHART_ICO",
+      "Name": "Hardware Graph",
+      "UUID": "com.victormarin.graphs.action",
+      "Tooltip": "Display hardware metrics as a graph",
+      "States": [{}]
+    }
+  ]
+}
