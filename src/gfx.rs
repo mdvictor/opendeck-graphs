@@ -346,8 +346,156 @@ pub fn image_to_data_uri(img: &RgbaImage) -> Result<String> {
     Ok(format!("data:image/png;base64,{}", base64))
 }
 
+/// Generate a gauge visualization
+pub fn generate_gauge(config: &GraphConfig) -> Result<RgbaImage> {
+    let mut img = RgbaImage::from_pixel(ICON_SIZE, ICON_SIZE, Rgba([0, 0, 0, 255]));
+
+    if config.data_points.is_empty() {
+        return Ok(img);
+    }
+
+    let current_value = config.data_points.last().copied().unwrap_or(0.0);
+    let is_warning = config.threshold.map(|t| current_value > t).unwrap_or(false);
+
+    let text_color = if is_warning {
+        config.color_scheme.warning_color
+    } else {
+        config.color_scheme.normal_color
+    };
+
+    // Draw title at the top
+    draw_title(&mut img, &config.title, &text_color);
+
+    // Calculate gauge parameters
+    let center_x = ICON_SIZE / 2;
+    let center_y = ICON_SIZE - 15; // Position near bottom
+    let radius = 60.0;
+    let start_angle = 225.0_f32.to_radians(); // Start at bottom-left
+    let end_angle = 315.0_f32.to_radians(); // End at bottom-right (270 degree arc)
+
+    // Calculate the percentage and angle for current value
+    let range = config.max_value - config.min_value;
+    let percentage = if range > 0.0 {
+        ((current_value - config.min_value) / range).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+
+    // Calculate threshold percentage
+    let threshold_percentage = config
+        .threshold
+        .map(|t| {
+            if range > 0.0 {
+                ((t - config.min_value) / range).clamp(0.0, 1.0)
+            } else {
+                0.8
+            }
+        })
+        .unwrap_or(0.8);
+
+    let arc_range = end_angle - start_angle;
+    let current_angle = start_angle + (percentage * arc_range);
+
+    // Draw the gauge arc background (in segments for color zones)
+    let num_segments = 90;
+    for i in 0..num_segments {
+        let segment_progress = i as f32 / num_segments as f32;
+        let angle = start_angle + segment_progress * arc_range;
+
+        // Determine color based on threshold
+        let segment_color = if segment_progress <= threshold_percentage {
+            config.color_scheme.normal_color
+        } else {
+            config.color_scheme.warning_color
+        };
+
+        // Draw arc segment with reduced opacity for background
+        let bg_color = Rgba([segment_color[0], segment_color[1], segment_color[2], 100]);
+        draw_arc_segment(
+            &mut img,
+            center_x,
+            center_y,
+            radius,
+            angle,
+            arc_range / num_segments as f32,
+            &bg_color,
+            8.0,
+        );
+    }
+
+    // Draw the needle/indicator
+    let needle_length = radius - 5.0;
+    let needle_x = center_x as f32 + needle_length * current_angle.cos();
+    let needle_y = center_y as f32 + needle_length * current_angle.sin();
+
+    // Draw needle line
+    draw_line_segment(
+        &mut img,
+        center_x,
+        center_y,
+        needle_x as u32,
+        needle_y as u32,
+        &text_color,
+    );
+
+    // Draw center dot
+    draw_filled_circle(&mut img, center_x, center_y, 4, &text_color);
+
+    Ok(img)
+}
+
+/// Draw an arc segment
+fn draw_arc_segment(
+    img: &mut RgbaImage,
+    center_x: u32,
+    center_y: u32,
+    radius: f32,
+    start_angle: f32,
+    angle_range: f32,
+    color: &Rgba<u8>,
+    thickness: f32,
+) {
+    let steps = 10;
+    for i in 0..steps {
+        let angle = start_angle + (i as f32 / steps as f32) * angle_range;
+        let x = center_x as f32 + radius * angle.cos();
+        let y = center_y as f32 + radius * angle.sin();
+
+        // Draw thick point by drawing circle
+        draw_filled_circle(img, x as u32, y as u32, (thickness / 2.0) as u32, color);
+    }
+}
+
+/// Draw a filled circle
+fn draw_filled_circle(
+    img: &mut RgbaImage,
+    center_x: u32,
+    center_y: u32,
+    radius: u32,
+    color: &Rgba<u8>,
+) {
+    let r2 = (radius * radius) as i32;
+    for dy in -(radius as i32)..=(radius as i32) {
+        for dx in -(radius as i32)..=(radius as i32) {
+            if dx * dx + dy * dy <= r2 {
+                let x = (center_x as i32 + dx) as u32;
+                let y = (center_y as i32 + dy) as u32;
+                if x < ICON_SIZE && y < ICON_SIZE {
+                    img.put_pixel(x, y, *color);
+                }
+            }
+        }
+    }
+}
+
 /// Generate a graph and return it as a data URI
 pub fn generate_graph_data_uri(config: &GraphConfig) -> Result<String> {
     let img = generate_graph(config)?;
+    image_to_data_uri(&img)
+}
+
+/// Generate a gauge and return it as a data URI
+pub fn generate_gauge_data_uri(config: &GraphConfig) -> Result<String> {
+    let img = generate_gauge(config)?;
     image_to_data_uri(&img)
 }

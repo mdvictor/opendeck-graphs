@@ -1,6 +1,7 @@
 use openaction::OpenActionResult;
 
 mod gfx;
+mod graph_data;
 mod plugin;
 mod sensors;
 mod websocket;

@@ -28,6 +28,9 @@
                 const websocketSection =
                     document.getElementById("websocket_section");
                 const metricType = document.getElementById("metric_type");
+                const fanNumber = document.getElementById("fan_number");
+                const fanNumberSection = document.getElementById("fan_number_section");
+                const visualizationType = document.getElementById("visualization_type");
                 const showValueText =
                     document.getElementById("show_value_text");
                 const threshold = document.getElementById("threshold");
@@ -46,7 +49,9 @@
                 // Set default values from settings
                 const settings = inActionInfo.payload.settings || {};
                 dataSource.value = settings.data_source || "lmsensors";
+                visualizationType.value = settings.visualization_type || "graph";
                 metricType.value = settings.metric_type || "cputemp";
+                fanNumber.value = settings.fan_number ?? 1;
                 showValueText.checked = settings.show_value_text ?? false;
                 normalColor.value = settings.normal_color || "#00ff00";
                 warningColor.value = settings.warning_color || "#ff0000";
@@ -59,15 +64,18 @@
                 const initMessages = settings.websocket_init_messages || [];
                 renderInitMessages(initMessages);
 
-                // Show/hide sections based on data source
+                // Show/hide sections based on data source and metric type
                 toggleDataSourceSections();
+                toggleFanNumberSection();
 
                 websocket.onmessage = (event) => {
                     const data = JSON.parse(event.data);
                     if (data.event == "didReceiveSettings") {
                         const s = data.payload.settings || {};
                         dataSource.value = s.data_source || "lmsensors";
+                        visualizationType.value = s.visualization_type || "graph";
                         metricType.value = s.metric_type || "cputemp";
+                        fanNumber.value = s.fan_number ?? 1;
                         showValueText.checked = s.show_value_text ?? false;
                         threshold.value = s.threshold ?? "";
                         normalColor.value = s.normal_color || "#00ff00";
@@ -80,6 +88,7 @@
                         const msgs = s.websocket_init_messages || [];
                         renderInitMessages(msgs);
                         toggleDataSourceSections();
+                        toggleFanNumberSection();
                     }
                 };
 
@@ -90,6 +99,14 @@
                     } else {
                         lmSensorsSection.style.display = "none";
                         websocketSection.style.display = "block";
+                    }
+                }
+
+                function toggleFanNumberSection() {
+                    if (dataSource.value === "lmsensors" && metricType.value === "systemfan") {
+                        fanNumberSection.style.display = "block";
+                    } else {
+                        fanNumberSection.style.display = "none";
                     }
                 }
 
@@ -132,12 +149,19 @@
 
                 window.dataSourceChanged = () => {
                     toggleDataSourceSections();
+                    toggleFanNumberSection();
+                    update();
+                };
+
+                window.metricTypeChanged = () => {
+                    toggleFanNumberSection();
                     update();
                 };
 
                 update = () => {
                     const settings = {
                         data_source: dataSource.value,
+                        visualization_type: visualizationType.value,
                         show_value_text: showValueText.checked,
                         normal_color: normalColor.value,
                         warning_color: warningColor.value,
@@ -146,6 +170,11 @@
                     // LM Sensors settings
                     if (dataSource.value === "lmsensors") {
                         settings.metric_type = metricType.value;
+
+                        // Fan number for system fan
+                        if (metricType.value === "systemfan" && fanNumber.value) {
+                            settings.fan_number = parseInt(fanNumber.value);
+                        }
                     }
 
                     // WebSocket settings
@@ -309,7 +338,7 @@
         <div id="lmsensors_section">
             <div class="field">
                 <label for="metric_type">Metric Type:</label>
-                <select id="metric_type" oninput="update();">
+                <select id="metric_type" oninput="metricTypeChanged();">
                     <option value="cputemp">CPU Temperature</option>
                     <option value="cpupackagetemp">
                         CPU Package Temperature
@@ -321,7 +350,6 @@
                         Motherboard Temperature
                     </option>
                     <option value="nvmetemp">NVMe Temperature</option>
-                    <option value="cpufan">CPU Fan Speed</option>
                     <option value="systemfan">System Fan Speed</option>
                     <option value="cpuvoltage">CPU Voltage</option>
                     <option value="diskwrite">Disk Write</option>
@@ -331,6 +359,21 @@
                     <option value="netdownload">Network Download</option>
                     <option value="netupload">Network Upload</option>
                 </select>
+            </div>
+
+            <div id="fan_number_section" class="field" style="display: none">
+                <label for="fan_number">Fan Number:</label>
+                <input
+                    type="number"
+                    id="fan_number"
+                    min="1"
+                    max="20"
+                    value="1"
+                    oninput="update();"
+                />
+                <div class="help-text">
+                    Select which fan sensor to monitor (fan1, fan2, etc.)
+                </div>
             </div>
         </div>
 
@@ -367,6 +410,13 @@
 
         <!-- Display Settings -->
         <div class="section-title">Display Settings</div>
+        <div class="field">
+            <label for="visualization_type">Visualization Type:</label>
+            <select id="visualization_type" oninput="update();">
+                <option value="graph">Graph</option>
+                <option value="gauge">Gauge</option>
+            </select>
+        </div>
         <div class="field checkbox-field">
             <input id="show_value_text" type="checkbox" oninput="update();" />
             <label for="show_value_text">Show Current Value</label>

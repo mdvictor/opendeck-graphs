@@ -1,5 +1,7 @@
 use anyhow::Result;
 use lm_sensors as sensors;
+use std::fs;
+use std::path::Path;
 use std::sync::Mutex;
 use sysinfo::{Components, Disks, Networks, System};
 
@@ -8,6 +10,33 @@ static PREV_DISK_WRITE: Mutex<Option<u64>> = Mutex::new(None);
 static PREV_DISK_READ: Mutex<Option<u64>> = Mutex::new(None);
 static PREV_NET_RX: Mutex<Option<u64>> = Mutex::new(None);
 static PREV_NET_TX: Mutex<Option<u64>> = Mutex::new(None);
+
+#[derive(Debug, Clone, Copy)]
+enum GpuVendor {
+    Nvidia,
+    Amd,
+    Intel,
+    Unknown,
+}
+
+fn detect_gpu_vendor() -> GpuVendor {
+    // Check NVIDIA
+    if Path::new("/proc/driver/nvidia/version").exists() {
+        return GpuVendor::Nvidia;
+    }
+
+    // Check AMD
+    if Path::new("/sys/class/drm/card0/device/gpu_busy_percent").exists() {
+        return GpuVendor::Amd;
+    }
+
+    // Check Intel
+    if Path::new("/sys/class/drm/card0/gt_cur_freq_mhz").exists() {
+        return GpuVendor::Intel;
+    }
+
+    GpuVendor::Unknown
+}
 
 /// Find CPU load percentage by reading /proc/stat
 pub async fn find_cpu_load() -> Result<f32> {
@@ -172,33 +201,9 @@ pub async fn find_net_upload() -> Result<f32> {
     Ok(upload_speed)
 }
 /// Find CPU temperature from lm-sensors
-pub async fn find_cpu_temperature(
-    sensor_chip: Option<&str>,
-    sensor_feature: Option<&str>,
-) -> Result<f32> {
+pub async fn find_cpu_temperature() -> Result<f32> {
     let sensors_lib = sensors::Initializer::default().initialize()?;
 
-    // Check for custom sensor first
-    if let (Some(chip_name), Some(feature_name)) = (sensor_chip, sensor_feature) {
-        for chip in sensors_lib.chip_iter(None) {
-            let chip_name_str = format!("{}", chip);
-            if chip_name_str.contains(chip_name) {
-                for feature in chip.feature_iter() {
-                    if let Ok(feature_label) = feature.label() {
-                        if feature_label.contains(feature_name) {
-                            for sub_feature in feature.sub_feature_iter() {
-                                if let Ok(value) = sub_feature.value() {
-                                    return Ok(value.raw_value() as f32);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Auto-detect
     for chip in sensors_lib.chip_iter(None) {
         let chip_name = format!("{}", chip);
         if chip_name.contains("coretemp") || chip_name.contains("k10temp") {
@@ -221,46 +226,29 @@ pub async fn find_cpu_temperature(
     Ok(0.0)
 }
 
-/// Find GPU load percentage from lm-sensors
-pub async fn find_gpu_load(sensor_chip: Option<&str>, sensor_feature: Option<&str>) -> Result<f32> {
-    let sensors_lib = sensors::Initializer::default().initialize()?;
-
-    // Check for custom sensor first
-    if let (Some(chip_name), Some(feature_name)) = (sensor_chip, sensor_feature) {
-        for chip in sensors_lib.chip_iter(None) {
-            let chip_name_str = format!("{}", chip);
-            if chip_name_str.contains(chip_name) {
-                for feature in chip.feature_iter() {
-                    if let Ok(feature_label) = feature.label() {
-                        if feature_label.contains(feature_name) {
-                            for sub_feature in feature.sub_feature_iter() {
-                                if let Ok(value) = sub_feature.value() {
-                                    return Ok(value.raw_value() as f32);
-                                }
-                            }
-                        }
+/// Find GPU load percentage
+pub async fn find_gpu_load() -> Result<f32> {
+    match detect_gpu_vendor() {
+        GpuVendor::Amd => {
+            // AMD GPU load from sysfs
+            if let Ok(load_str) = fs::read_to_string("/sys/class/drm/card0/device/gpu_busy_percent")
+            {
+                if let Ok(load) = load_str.trim().parse::<f32>() {
+                    return Ok(load);
+                }
+            }
+        }
+        GpuVendor::Nvidia => {
+            // NVIDIA GPU load using NVML
+            if let Ok(nvml) = nvml_wrapper::Nvml::init() {
+                if let Ok(device) = nvml.device_by_index(0) {
+                    if let Ok(utilization) = device.utilization_rates() {
+                        return Ok(utilization.gpu as f32);
                     }
                 }
             }
         }
-    }
-
-    // Auto-detect AMD GPU load
-    for chip in sensors_lib.chip_iter(None) {
-        let chip_name = format!("{}", chip);
-        if chip_name.contains("amdgpu") {
-            for feature in chip.feature_iter() {
-                if let Ok(label) = feature.label() {
-                    if label.contains("GPU") {
-                        for sub_feature in feature.sub_feature_iter() {
-                            if let Ok(value) = sub_feature.value() {
-                                return Ok(value.raw_value() as f32);
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        _ => {}
     }
 
     log::warn!("GPU load sensor not found");
@@ -268,80 +256,45 @@ pub async fn find_gpu_load(sensor_chip: Option<&str>, sensor_feature: Option<&st
 }
 
 /// Find GPU temperature from lm-sensors
-pub async fn find_gpu_temperature(
-    sensor_chip: Option<&str>,
-    sensor_feature: Option<&str>,
-) -> Result<f32> {
-    let sensors_lib = sensors::Initializer::default().initialize()?;
-
-    // Check for custom sensor first
-    if let (Some(chip_name), Some(feature_name)) = (sensor_chip, sensor_feature) {
-        for chip in sensors_lib.chip_iter(None) {
-            let chip_name_str = format!("{}", chip);
-            if chip_name_str.contains(chip_name) {
-                for feature in chip.feature_iter() {
-                    if let Ok(feature_label) = feature.label() {
-                        if feature_label.contains(feature_name) {
-                            for sub_feature in feature.sub_feature_iter() {
-                                if let Ok(value) = sub_feature.value() {
-                                    return Ok(value.raw_value() as f32);
-                                }
-                            }
+pub async fn find_gpu_temperature() -> Result<f32> {
+    match detect_gpu_vendor() {
+        GpuVendor::Amd => {
+            // AMD GPU temperature from sysfs hwmon
+            let hwmon_path = "/sys/class/drm/card0/device/hwmon";
+            if let Ok(entries) = fs::read_dir(hwmon_path) {
+                for entry in entries.flatten() {
+                    let temp_path = entry.path().join("temp1_input");
+                    if let Ok(temp_str) = fs::read_to_string(temp_path) {
+                        if let Ok(temp_millis) = temp_str.trim().parse::<f32>() {
+                            return Ok(temp_millis / 1000.0);
                         }
                     }
                 }
             }
         }
-    }
-
-    // Auto-detect
-    for chip in sensors_lib.chip_iter(None) {
-        let chip_name = format!("{}", chip);
-        if chip_name.contains("amdgpu") || chip_name.contains("nvidia") {
-            for feature in chip.feature_iter() {
-                if let Ok(label) = feature.label() {
-                    if label.contains("temp") || label.contains("edge") {
-                        for sub_feature in feature.sub_feature_iter() {
-                            if let Ok(value) = sub_feature.value() {
-                                return Ok(value.raw_value() as f32);
-                            }
-                        }
+        GpuVendor::Nvidia => {
+            // NVIDIA GPU temperature using NVML
+            if let Ok(nvml) = nvml_wrapper::Nvml::init() {
+                if let Ok(device) = nvml.device_by_index(0) {
+                    if let Ok(temp) = device
+                        .temperature(nvml_wrapper::enum_wrappers::device::TemperatureSensor::Gpu)
+                    {
+                        return Ok(temp as f32);
                     }
                 }
             }
         }
+        _ => {}
     }
+
+    log::warn!("GPU temperature sensor not found");
     Ok(0.0)
 }
 
 /// Find motherboard temperature from lm-sensors
-pub async fn find_motherboard_temperature(
-    sensor_chip: Option<&str>,
-    sensor_feature: Option<&str>,
-) -> Result<f32> {
+pub async fn find_motherboard_temperature() -> Result<f32> {
     let sensors_lib = sensors::Initializer::default().initialize()?;
 
-    // Check for custom sensor first
-    if let (Some(chip_name), Some(feature_name)) = (sensor_chip, sensor_feature) {
-        for chip in sensors_lib.chip_iter(None) {
-            let chip_name_str = format!("{}", chip);
-            if chip_name_str.contains(chip_name) {
-                for feature in chip.feature_iter() {
-                    if let Ok(feature_label) = feature.label() {
-                        if feature_label.contains(feature_name) {
-                            for sub_feature in feature.sub_feature_iter() {
-                                if let Ok(value) = sub_feature.value() {
-                                    return Ok(value.raw_value() as f32);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Auto-detect
     for chip in sensors_lib.chip_iter(None) {
         let chip_name = format!("{}", chip);
         if chip_name.contains("nct") || chip_name.contains("it87") {
@@ -362,33 +315,9 @@ pub async fn find_motherboard_temperature(
 }
 
 /// Find NVMe temperature from lm-sensors
-pub async fn find_nvme_temperature(
-    sensor_chip: Option<&str>,
-    sensor_feature: Option<&str>,
-) -> Result<f32> {
+pub async fn find_nvme_temperature() -> Result<f32> {
     let sensors_lib = sensors::Initializer::default().initialize()?;
 
-    // Check for custom sensor first
-    if let (Some(chip_name), Some(feature_name)) = (sensor_chip, sensor_feature) {
-        for chip in sensors_lib.chip_iter(None) {
-            let chip_name_str = format!("{}", chip);
-            if chip_name_str.contains(chip_name) {
-                for feature in chip.feature_iter() {
-                    if let Ok(feature_label) = feature.label() {
-                        if feature_label.contains(feature_name) {
-                            for sub_feature in feature.sub_feature_iter() {
-                                if let Ok(value) = sub_feature.value() {
-                                    return Ok(value.raw_value() as f32);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Auto-detect
     for chip in sensors_lib.chip_iter(None) {
         let chip_name = format!("{}", chip);
         if chip_name.contains("nvme") {
@@ -404,24 +333,27 @@ pub async fn find_nvme_temperature(
     Ok(0.0)
 }
 
-/// Find CPU fan speed from lm-sensors
-pub async fn find_cpu_fan_speed(
-    sensor_chip: Option<&str>,
-    sensor_feature: Option<&str>,
-) -> Result<f32> {
+/// Find system fan speed from lm-sensors by fan number
+pub async fn find_system_fan_speed(fan_number: u32) -> Result<f32> {
     let sensors_lib = sensors::Initializer::default().initialize()?;
 
-    // Check for custom sensor first
-    if let (Some(chip_name), Some(feature_name)) = (sensor_chip, sensor_feature) {
-        for chip in sensors_lib.chip_iter(None) {
-            let chip_name_str = format!("{}", chip);
-            if chip_name_str.contains(chip_name) {
-                for feature in chip.feature_iter() {
-                    if let Ok(feature_label) = feature.label() {
-                        if feature_label.contains(feature_name) {
+    let target_fan = format!("fan{}", fan_number);
+
+    for chip in sensors_lib.chip_iter(None) {
+        for feature in chip.feature_iter() {
+            // Check if this is a fan feature
+            if let Some(kind) = feature.kind() {
+                if matches!(kind, sensors::feature::Kind::Fan) {
+                    // Check the feature name (like "fan1", "fan2", etc.)
+                    if let Some(Ok(feature_name)) = feature.name() {
+                        if feature_name == target_fan {
                             for sub_feature in feature.sub_feature_iter() {
-                                if let Ok(value) = sub_feature.value() {
-                                    return Ok(value.raw_value() as f32);
+                                if let Some(Ok(name)) = sub_feature.name() {
+                                    if name.contains("input") {
+                                        if let Ok(value) = sub_feature.value() {
+                                            return Ok(value.raw_value() as f32);
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -431,95 +363,14 @@ pub async fn find_cpu_fan_speed(
         }
     }
 
-    // Auto-detect
-    for chip in sensors_lib.chip_iter(None) {
-        for feature in chip.feature_iter() {
-            if let Ok(label) = feature.label() {
-                if label.contains("CPU") && label.contains("fan") {
-                    for sub_feature in feature.sub_feature_iter() {
-                        if let Ok(value) = sub_feature.value() {
-                            return Ok(value.raw_value() as f32);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    Ok(0.0)
-}
-
-/// Find system fan speed from lm-sensors
-pub async fn find_system_fan_speed(
-    sensor_chip: Option<&str>,
-    sensor_feature: Option<&str>,
-) -> Result<f32> {
-    let sensors_lib = sensors::Initializer::default().initialize()?;
-
-    // Check for custom sensor first
-    if let (Some(chip_name), Some(feature_name)) = (sensor_chip, sensor_feature) {
-        for chip in sensors_lib.chip_iter(None) {
-            let chip_name_str = format!("{}", chip);
-            if chip_name_str.contains(chip_name) {
-                for feature in chip.feature_iter() {
-                    if let Ok(feature_label) = feature.label() {
-                        if feature_label.contains(feature_name) {
-                            for sub_feature in feature.sub_feature_iter() {
-                                if let Ok(value) = sub_feature.value() {
-                                    return Ok(value.raw_value() as f32);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Auto-detect
-    for chip in sensors_lib.chip_iter(None) {
-        for feature in chip.feature_iter() {
-            if let Ok(label) = feature.label() {
-                if label.contains("fan") && !label.contains("CPU") {
-                    for sub_feature in feature.sub_feature_iter() {
-                        if let Ok(value) = sub_feature.value() {
-                            return Ok(value.raw_value() as f32);
-                        }
-                    }
-                }
-            }
-        }
-    }
+    log::warn!("System fan {} sensor not found", fan_number);
     Ok(0.0)
 }
 
 /// Find CPU voltage from lm-sensors
-pub async fn find_cpu_voltage(
-    sensor_chip: Option<&str>,
-    sensor_feature: Option<&str>,
-) -> Result<f32> {
+pub async fn find_cpu_voltage() -> Result<f32> {
     let sensors_lib = sensors::Initializer::default().initialize()?;
 
-    // Check for custom sensor first
-    if let (Some(chip_name), Some(feature_name)) = (sensor_chip, sensor_feature) {
-        for chip in sensors_lib.chip_iter(None) {
-            let chip_name_str = format!("{}", chip);
-            if chip_name_str.contains(chip_name) {
-                for feature in chip.feature_iter() {
-                    if let Ok(feature_label) = feature.label() {
-                        if feature_label.contains(feature_name) {
-                            for sub_feature in feature.sub_feature_iter() {
-                                if let Ok(value) = sub_feature.value() {
-                                    return Ok(value.raw_value() as f32);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Auto-detect
     for chip in sensors_lib.chip_iter(None) {
         for feature in chip.feature_iter() {
             if let Ok(label) = feature.label() {
