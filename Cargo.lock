@@ -1154,6 +1154,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "oa-graphs"
+version = "1.0.0"
+dependencies = [
+ "ab_glyph",
+ "anyhow",
+ "async-trait",
+ "base64",
+ "futures-util",
+ "image",
+ "imageproc",
+ "lazy_static",
+ "lm-sensors",
+ "log",
+ "nvml-wrapper",
+ "openaction",
+ "serde",
+ "serde_json",
+ "simplelog",
+ "sysinfo",
+ "tokio",
+ "tokio-tungstenite 0.24.0",
+]
+
+[[package]]
 name = "object"
 version = "0.37.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1183,30 +1207,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-tungstenite 0.28.0",
-]
-
-[[package]]
-name = "opendeck-graphs"
-version = "0.1.0"
-dependencies = [
- "ab_glyph",
- "anyhow",
- "async-trait",
- "base64",
- "futures-util",
- "image",
- "imageproc",
- "lazy_static",
- "lm-sensors",
- "log",
- "nvml-wrapper",
- "openaction",
- "serde",
- "serde_json",
- "simplelog",
- "sysinfo",
- "tokio",
- "tokio-tungstenite 0.24.0",
 ]
 
 [[package]]
