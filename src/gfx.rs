@@ -366,14 +366,18 @@ pub fn generate_gauge(config: &GraphConfig) -> Result<RgbaImage> {
     // Draw title at the top
     draw_title(&mut img, &config.title, &text_color);
 
-    // Calculate gauge parameters
+    // Calculate gauge parameters for a horseshoe-shaped meter
     let center_x = ICON_SIZE / 2;
-    let center_y = ICON_SIZE - 15; // Position near bottom
-    let radius = 60.0;
-    let start_angle = 225.0_f32.to_radians(); // Start at bottom-left
-    let end_angle = 315.0_f32.to_radians(); // End at bottom-right (270 degree arc)
+    let center_y = ICON_SIZE / 2 + 15; // Position center to keep arc within bounds
+    let outer_radius = 55.0;
+    let arc_thickness = 18.0; // Thick arc for better visibility
+    let inner_radius = outer_radius - arc_thickness;
 
-    // Calculate the percentage and angle for current value
+    let start_angle = 135.0_f32.to_radians(); // Start at 135° for symmetric horseshoe
+    let end_angle = 45.0_f32.to_radians(); // End at 45° (270 degree arc, symmetric)
+    let arc_range = end_angle - start_angle + 2.0 * std::f32::consts::PI; // Handle wrap around
+
+    // Calculate the percentage for current value
     let range = config.max_value - config.min_value;
     let percentage = if range > 0.0 {
         ((current_value - config.min_value) / range).clamp(0.0, 1.0)
@@ -393,94 +397,137 @@ pub fn generate_gauge(config: &GraphConfig) -> Result<RgbaImage> {
         })
         .unwrap_or(0.8);
 
-    let arc_range = end_angle - start_angle;
-    let current_angle = start_angle + (percentage * arc_range);
+    let filled_angle = start_angle + (percentage * arc_range);
+    let threshold_angle = start_angle + (threshold_percentage * arc_range);
 
-    // Draw the gauge arc background (in segments for color zones)
-    let num_segments = 90;
-    for i in 0..num_segments {
-        let segment_progress = i as f32 / num_segments as f32;
-        let angle = start_angle + segment_progress * arc_range;
-
-        // Determine color based on threshold
-        let segment_color = if segment_progress <= threshold_percentage {
-            config.color_scheme.normal_color
-        } else {
-            config.color_scheme.warning_color
-        };
-
-        // Draw arc segment with reduced opacity for background
-        let bg_color = Rgba([segment_color[0], segment_color[1], segment_color[2], 100]);
-        draw_arc_segment(
-            &mut img,
-            center_x,
-            center_y,
-            radius,
-            angle,
-            arc_range / num_segments as f32,
-            &bg_color,
-            8.0,
-        );
-    }
-
-    // Draw the needle/indicator
-    let needle_length = radius - 5.0;
-    let needle_x = center_x as f32 + needle_length * current_angle.cos();
-    let needle_y = center_y as f32 + needle_length * current_angle.sin();
-
-    // Draw needle line
-    draw_line_segment(
+    // Draw background arc with threshold coloring
+    // First, draw the normal zone (0% to threshold)
+    let normal_bg_color = Rgba([
+        config.color_scheme.normal_color[0] / 3,
+        config.color_scheme.normal_color[1] / 3,
+        config.color_scheme.normal_color[2] / 3,
+        180,
+    ]);
+    draw_thick_arc(
         &mut img,
         center_x,
         center_y,
-        needle_x as u32,
-        needle_y as u32,
-        &text_color,
+        inner_radius,
+        outer_radius,
+        start_angle,
+        threshold_angle,
+        &normal_bg_color,
     );
 
-    // Draw center dot
-    draw_filled_circle(&mut img, center_x, center_y, 4, &text_color);
+    // Then, draw the warning zone (threshold to 100%)
+    if config.threshold.is_some() {
+        let warning_bg_color = Rgba([
+            config.color_scheme.warning_color[0] / 3,
+            config.color_scheme.warning_color[1] / 3,
+            config.color_scheme.warning_color[2] / 3,
+            180,
+        ]);
+        draw_thick_arc(
+            &mut img,
+            center_x,
+            center_y,
+            inner_radius,
+            outer_radius,
+            threshold_angle,
+            end_angle,
+            &warning_bg_color,
+        );
+    } else {
+        // No threshold, draw remaining arc in normal color
+        draw_thick_arc(
+            &mut img,
+            center_x,
+            center_y,
+            inner_radius,
+            outer_radius,
+            threshold_angle,
+            end_angle,
+            &normal_bg_color,
+        );
+    }
+
+    // Draw filled arc (progress) - determine color based on threshold
+    let fill_color = if percentage > threshold_percentage && config.threshold.is_some() {
+        config.color_scheme.warning_color
+    } else {
+        config.color_scheme.normal_color
+    };
+
+    draw_thick_arc(
+        &mut img,
+        center_x,
+        center_y,
+        inner_radius,
+        outer_radius,
+        start_angle,
+        filled_angle,
+        &fill_color,
+    );
 
     Ok(img)
 }
 
-/// Draw an arc segment
-fn draw_arc_segment(
+/// Draw a thick arc between two angles
+fn draw_thick_arc(
     img: &mut RgbaImage,
     center_x: u32,
     center_y: u32,
-    radius: f32,
+    inner_radius: f32,
+    outer_radius: f32,
     start_angle: f32,
-    angle_range: f32,
-    color: &Rgba<u8>,
-    thickness: f32,
-) {
-    let steps = 10;
-    for i in 0..steps {
-        let angle = start_angle + (i as f32 / steps as f32) * angle_range;
-        let x = center_x as f32 + radius * angle.cos();
-        let y = center_y as f32 + radius * angle.sin();
-
-        // Draw thick point by drawing circle
-        draw_filled_circle(img, x as u32, y as u32, (thickness / 2.0) as u32, color);
-    }
-}
-
-/// Draw a filled circle
-fn draw_filled_circle(
-    img: &mut RgbaImage,
-    center_x: u32,
-    center_y: u32,
-    radius: u32,
+    end_angle: f32,
     color: &Rgba<u8>,
 ) {
-    let r2 = (radius * radius) as i32;
-    for dy in -(radius as i32)..=(radius as i32) {
-        for dx in -(radius as i32)..=(radius as i32) {
-            if dx * dx + dy * dy <= r2 {
-                let x = (center_x as i32 + dx) as u32;
-                let y = (center_y as i32 + dy) as u32;
-                if x < ICON_SIZE && y < ICON_SIZE {
+    let cx = center_x as f32;
+    let cy = center_y as f32;
+
+    // Iterate through all pixels in the bounding box
+    let min_x = (cx - outer_radius).max(0.0) as u32;
+    let max_x = (cx + outer_radius).min(ICON_SIZE as f32) as u32;
+    let min_y = (cy - outer_radius).max(0.0) as u32;
+    let max_y = (cy + outer_radius).min(ICON_SIZE as f32) as u32;
+
+    for y in min_y..max_y {
+        for x in min_x..max_x {
+            let dx = x as f32 - cx;
+            let dy = y as f32 - cy;
+            let distance = (dx * dx + dy * dy).sqrt();
+
+            // Check if pixel is within the arc ring
+            if distance >= inner_radius && distance <= outer_radius {
+                // Calculate angle of this pixel
+                let mut angle = dy.atan2(dx);
+
+                // Normalize angle to 0..2π range
+                if angle < 0.0 {
+                    angle += 2.0 * std::f32::consts::PI;
+                }
+
+                // Check if angle is within the arc range
+                let mut start = start_angle;
+                let mut end = end_angle;
+
+                // Normalize start and end angles to 0..2π range
+                if start < 0.0 {
+                    start += 2.0 * std::f32::consts::PI;
+                }
+                if end < 0.0 {
+                    end += 2.0 * std::f32::consts::PI;
+                }
+
+                let in_range = if start <= end {
+                    angle >= start && angle <= end
+                } else {
+                    // Arc wraps around 0
+                    angle >= start || angle <= end
+                };
+
+                if in_range {
                     img.put_pixel(x, y, *color);
                 }
             }

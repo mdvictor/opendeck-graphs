@@ -10,11 +10,11 @@
   "OS": [{ "Platform": "linux" }],
   "Category": "Graphs",
   "Description": "Display hardware metrics as timeseries graphs on your Stream Deck",
-  "Icon": "imgs/icon",
+  "Icon": "img/icon",
   "PropertyInspectorPath": "pi.html",
   "Actions": [
     {
-      "Icon": "imgs/icon",
+      "Icon": "img/icon",
       "Name": "Hardware Graph",
       "UUID": "com.victormarin.graphs.action",
       "Tooltip": "Display hardware metrics as a graph",
