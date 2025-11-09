@@ -1,7 +1,5 @@
 # Hardware Graphs
 
-![Showcase](./img/readme.png)
-
 A configurable Stream Deck plugin that displays real-time hardware sensor data as interactive graphs.
 
 ![Hardware Graphs Plugin](img/readme.png)
