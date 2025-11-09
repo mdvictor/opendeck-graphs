@@ -1,6 +1,6 @@
 # Hardware Graphs
 
-A configurable Stream Deck plugin that displays real-time hardware sensor data as interactive graphs.
+A configurable OpenDeck plugin that displays real-time hardware sensor data as interactive graphs.
 
 ![Hardware Graphs Plugin](img/readme.png)
 
