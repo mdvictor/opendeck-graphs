@@ -33,6 +33,9 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      - name: Install libsensors
+        run: sudo apt-get update && sudo apt-get install -y libsensors-dev
+
       - name: Build binary
         run: cargo build --release --target ${{ matrix.target }}
 
