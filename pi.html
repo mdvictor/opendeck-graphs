@@ -101,6 +101,7 @@
 
                 function applySettings(s) {
                     dataSource.value = s.data_source || "local";
+                    if (!dataSource.value) dataSource.value = "local";
                     visualizationType.value = s.visualization_type || "graph";
                     metricType.value = s.metric_type || "cputemp";
                     fanNumber.value = s.fan_number ?? 1;
