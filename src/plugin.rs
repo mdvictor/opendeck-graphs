@@ -213,33 +213,6 @@ pub async fn start_sensor_monitoring() {
 
                         let config = graph_data.get_graph_config();
 
-                        // Prepare title text before dropping instances
-                        let title_option = if graph_data.settings.show_value_text {
-                            // Show "X.X/Y.YGB" for memory metrics in GB mode
-                            if graph_data.settings.memory_display() == MemoryDisplay::Gigabytes {
-                                let total = match graph_data.settings.metric_type {
-                                    MetricType::GpuVram => graph_data.vram_total_gb,
-                                    MetricType::RamUsage => graph_data.ram_total_gb,
-                                    _ => None,
-                                };
-                                if let Some(total) = total {
-                                    Some(format!("{:.1}/{:.0}GB", value, total))
-                                } else {
-                                    Some(format!("{:.1}GB", value))
-                                }
-                            } else {
-                                let suffix = match graph_data.settings.data_source {
-                                    DataSource::Local => {
-                                        graph_data.settings.effective_suffix()
-                                    }
-                                    DataSource::WebSocket => "",
-                                };
-                                Some(format!("{:.1}{}", value, suffix))
-                            }
-                        } else {
-                            None
-                        };
-
                         let data_uri_result = match graph_data.settings.visualization_type {
                             VisualizationType::Graph => {
                                 crate::gfx::generate_graph_data_uri(&config)
@@ -252,13 +225,9 @@ pub async fn start_sensor_monitoring() {
                         if let Ok(data_uri) = data_uri_result {
                             drop(instances);
                             let _ = instance.set_image(Some(data_uri), None).await;
-
-                            // Set title with current value if enabled
-                            if let Some(title_text) = title_option {
-                                let _ = instance.set_title(Some(title_text), None).await;
-                            } else {
-                                let _ = instance.set_title(None::<String>, None).await;
-                            }
+                            // Value text is drawn into the image (config.value_text); clear any
+                            // previously-set OpenDeck title overlay so we don't double-render.
+                            let _ = instance.set_title(None::<String>, None).await;
                         }
                     }
                 }

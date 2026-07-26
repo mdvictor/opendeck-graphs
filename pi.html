@@ -21,14 +21,11 @@
                     );
                 };
 
-                // Get elements
+                // Functional controls
                 const dataSource = document.getElementById("data_source");
-                const localSection =
-                    document.getElementById("local_section");
-                const websocketSection =
-                    document.getElementById("websocket_section");
-                const websocketBanner =
-                    document.getElementById("websocket_banner");
+                const localSection = document.getElementById("local_section");
+                const websocketSection = document.getElementById("websocket_section");
+                const websocketBanner = document.getElementById("websocket_banner");
                 const metricType = document.getElementById("metric_type");
                 const fanNumber = document.getElementById("fan_number");
                 const fanNumberSection = document.getElementById("fan_number_section");
@@ -38,82 +35,62 @@
                 const ramDisplaySection = document.getElementById("ram_display_section");
                 const gpuCardSection = document.getElementById("gpu_card_section");
                 const gpuCard = document.getElementById("gpu_card");
-                const visualizationType = document.getElementById("visualization_type");
-                const showValueText =
-                    document.getElementById("show_value_text");
                 const threshold = document.getElementById("threshold");
-                const normalColor = document.getElementById("normal_color");
-                const warningColor = document.getElementById("warning_color");
                 const maxValue = document.getElementById("max_value");
                 const minValue = document.getElementById("min_value");
                 const websocketUrl = document.getElementById("websocket_url");
-                const websocketApiKey =
-                    document.getElementById("websocket_api_key");
+                const websocketApiKey = document.getElementById("websocket_api_key");
+                const initMessagesContainer = document.getElementById("init_messages_container");
 
-                const initMessagesContainer = document.getElementById(
-                    "init_messages_container",
-                );
+                // Appearance controls
+                const visualizationType = document.getElementById("visualization_type");
+                const showValueText = document.getElementById("show_value_text");
+                const normalColor = document.getElementById("normal_color");
+                const warningColor = document.getElementById("warning_color");
 
-                // Set default values from settings
+                const bgColor = document.getElementById("bg_color");
+                const bgGradient = document.getElementById("bg_gradient");
+                const bgGradientColor = document.getElementById("bg_gradient_color");
+                const bgBalance = document.getElementById("bg_balance");
+                const bgSoftness = document.getElementById("bg_softness");
+                const gradientFieldsSection = document.getElementById("gradient_fields_section");
+
+                const titleColorCustom = document.getElementById("title_color_custom");
+                const titleColor = document.getElementById("title_color");
+                const fillColorCustom = document.getElementById("fill_color_custom");
+                const fillColor = document.getElementById("fill_color");
+                const valueTextColor = document.getElementById("value_text_color");
+
+                const gaugeOuterRadius = document.getElementById("gauge_outer_radius");
+                const gaugeThickness = document.getElementById("gauge_thickness");
+                const gaugeSection = document.getElementById("gauge_section");
+
+                const titleSize = document.getElementById("title_size");
+                const valueTextSize = document.getElementById("value_text_size");
+                const valueTextPosition = document.getElementById("value_text_position");
+
+                // Populate controls from current settings
                 const settings = inActionInfo.payload.settings || {};
-                dataSource.value = settings.data_source || "local";
-                visualizationType.value = settings.visualization_type || "graph";
-                metricType.value = settings.metric_type || "cputemp";
-                fanNumber.value = settings.fan_number ?? 1;
-                vramDisplay.value = settings.vram_display || "percentage";
-                ramDisplay.value = settings.ram_display || "percentage";
-                showValueText.checked = settings.show_value_text ?? false;
-                normalColor.value = settings.normal_color || "#00ff00";
-                warningColor.value = settings.warning_color || "#ff0000";
-                maxValue.value = settings.max_value ?? "";
-                minValue.value = settings.min_value ?? "";
-                websocketUrl.value = settings.websocket_url || "";
-                websocketApiKey.value = settings.websocket_api_key || "";
+                applySettings(settings);
 
-                // Store current gpu_card from settings to restore after GPU list loads
                 let savedGpuCard = settings.gpu_card || "";
 
-                // Initialize init messages
                 const initMessages = settings.websocket_init_messages || [];
                 renderInitMessages(initMessages);
 
-                // Show/hide sections based on data source and metric type
-                toggleDataSourceSections();
-                toggleFanNumberSection();
-                toggleGpuCardSection();
-                toggleVramDisplaySection();
-                toggleRamDisplaySection();
+                refreshDynamicSections();
 
                 websocket.onmessage = (event) => {
                     const data = JSON.parse(event.data);
                     if (data.event == "didReceiveSettings") {
                         const s = data.payload.settings || {};
-                        dataSource.value = s.data_source || "local";
-                        visualizationType.value = s.visualization_type || "graph";
-                        metricType.value = s.metric_type || "cputemp";
-                        fanNumber.value = s.fan_number ?? 1;
-                        vramDisplay.value = s.vram_display || "percentage";
-                        ramDisplay.value = s.ram_display || "percentage";
-                        showValueText.checked = s.show_value_text ?? false;
-                        threshold.value = s.threshold ?? "";
-                        normalColor.value = s.normal_color || "#00ff00";
-                        warningColor.value = s.warning_color || "#ff0000";
-                        maxValue.value = s.max_value ?? "";
-                        minValue.value = s.min_value ?? "";
-                        websocketUrl.value = s.websocket_url || "";
-                        websocketApiKey.value = s.websocket_api_key || "";
+                        applySettings(s);
                         savedGpuCard = s.gpu_card || "";
                         if (gpuCard.options.length > 0) {
                             gpuCard.value = savedGpuCard;
                         }
-
-                        const msgs = s.websocket_init_messages || [];
-                        renderInitMessages(msgs);
-                        toggleDataSourceSections();
-                        toggleFanNumberSection();
-                        toggleGpuCardSection();
-                        toggleVramDisplaySection();
-                        toggleRamDisplaySection();
+                        renderInitMessages(s.websocket_init_messages || []);
+                        refreshDynamicSections();
                     } else if (data.event == "sendToPropertyInspector") {
                         const payload = data.payload || {};
                         if (payload.event === "gpuList") {
@@ -121,6 +98,65 @@
                         }
                     }
                 };
+
+                function applySettings(s) {
+                    dataSource.value = s.data_source || "local";
+                    visualizationType.value = s.visualization_type || "graph";
+                    metricType.value = s.metric_type || "cputemp";
+                    fanNumber.value = s.fan_number ?? 1;
+                    vramDisplay.value = s.vram_display || "percentage";
+                    ramDisplay.value = s.ram_display || "percentage";
+                    showValueText.checked = s.show_value_text ?? false;
+                    threshold.value = s.threshold ?? "";
+                    normalColor.value = s.normal_color || "#00ff00";
+                    warningColor.value = s.warning_color || "#ff0000";
+                    maxValue.value = s.max_value ?? "";
+                    minValue.value = s.min_value ?? "";
+                    websocketUrl.value = s.websocket_url || "";
+                    websocketApiKey.value = s.websocket_api_key || "";
+
+                    bgColor.value = s.bg_color || "#000000";
+                    bgGradientColor.value = s.bg_gradient_color || "#202020";
+                    bgGradient.value = s.bg_gradient || "none";
+                    bgBalance.value = s.bg_balance ?? 50;
+                    bgSoftness.value = s.bg_softness ?? 50;
+                    document.getElementById("bg_balance_value").textContent = bgBalance.value;
+                    document.getElementById("bg_softness_value").textContent = bgSoftness.value;
+
+                    if (typeof s.title_color === "string" && s.title_color.length > 0) {
+                        titleColorCustom.checked = true;
+                        titleColor.value = s.title_color;
+                    } else {
+                        titleColorCustom.checked = false;
+                        titleColor.value = "#00ff00";
+                    }
+                    if (typeof s.graph_fill_color === "string" && s.graph_fill_color.length > 0) {
+                        fillColorCustom.checked = true;
+                        fillColor.value = s.graph_fill_color;
+                    } else {
+                        fillColorCustom.checked = false;
+                        fillColor.value = "#00ff00";
+                    }
+                    valueTextColor.value = s.value_text_color || "#ffffff";
+
+                    gaugeOuterRadius.value = s.gauge_outer_radius ?? 55;
+                    gaugeThickness.value = s.gauge_thickness ?? 18;
+
+                    titleSize.value = s.title_size ?? 25;
+                    valueTextPosition.value = s.value_text_position || "auto";
+                    valueTextSize.value = s.value_text_size ?? "";
+                }
+
+                function refreshDynamicSections() {
+                    toggleDataSourceSections();
+                    toggleFanNumberSection();
+                    toggleGpuCardSection();
+                    toggleVramDisplaySection();
+                    toggleRamDisplaySection();
+                    toggleGradientFields();
+                    toggleOverrideColorFields();
+                    toggleGaugeSection();
+                }
 
                 function populateGpuList(gpus, selectedCard) {
                     gpuCard.innerHTML = "";
@@ -155,27 +191,48 @@
                 }
 
                 function toggleFanNumberSection() {
-                    if (dataSource.value === "local" && metricType.value === "systemfan") {
-                        fanNumberSection.style.display = "block";
-                    } else {
-                        fanNumberSection.style.display = "none";
-                    }
+                    fanNumberSection.style.display =
+                        dataSource.value === "local" && metricType.value === "systemfan"
+                            ? "block"
+                            : "none";
                 }
 
                 function toggleVramDisplaySection() {
-                    const isVram = dataSource.value === "local" && metricType.value === "gpuvram";
-                    vramDisplaySection.style.display = isVram ? "block" : "none";
+                    vramDisplaySection.style.display =
+                        dataSource.value === "local" && metricType.value === "gpuvram"
+                            ? "block"
+                            : "none";
                 }
 
                 function toggleRamDisplaySection() {
-                    const isRam = dataSource.value === "local" && metricType.value === "ramusage";
-                    ramDisplaySection.style.display = isRam ? "block" : "none";
+                    ramDisplaySection.style.display =
+                        dataSource.value === "local" && metricType.value === "ramusage"
+                            ? "block"
+                            : "none";
                 }
 
                 function toggleGpuCardSection() {
-                    const isGpuMetric = dataSource.value === "local" &&
+                    const isGpuMetric =
+                        dataSource.value === "local" &&
                         ["gputemp", "gpuload", "gpuvram", "gpupower"].includes(metricType.value);
                     gpuCardSection.style.display = isGpuMetric ? "block" : "none";
+                }
+
+                function toggleGradientFields() {
+                    gradientFieldsSection.style.display =
+                        bgGradient.value === "none" ? "none" : "block";
+                }
+
+                function toggleOverrideColorFields() {
+                    document.getElementById("title_color_field").style.display =
+                        titleColorCustom.checked ? "block" : "none";
+                    document.getElementById("fill_color_field").style.display =
+                        fillColorCustom.checked ? "block" : "none";
+                }
+
+                function toggleGaugeSection() {
+                    gaugeSection.style.display =
+                        visualizationType.value === "gauge" ? "block" : "none";
                 }
 
                 function renderInitMessages(messages) {
@@ -216,19 +273,32 @@
                 };
 
                 window.dataSourceChanged = () => {
-                    toggleDataSourceSections();
-                    toggleFanNumberSection();
-                    toggleGpuCardSection();
-                    toggleVramDisplaySection();
-                    toggleRamDisplaySection();
+                    refreshDynamicSections();
                     update();
                 };
 
                 window.metricTypeChanged = () => {
-                    toggleFanNumberSection();
-                    toggleGpuCardSection();
-                    toggleVramDisplaySection();
-                    toggleRamDisplaySection();
+                    refreshDynamicSections();
+                    update();
+                };
+
+                window.visualizationChanged = () => {
+                    toggleGaugeSection();
+                    update();
+                };
+
+                window.bgGradientChanged = () => {
+                    toggleGradientFields();
+                    update();
+                };
+
+                window.titleColorCustomChanged = () => {
+                    toggleOverrideColorFields();
+                    update();
+                };
+
+                window.fillColorCustomChanged = () => {
+                    toggleOverrideColorFields();
                     update();
                 };
 
@@ -239,26 +309,40 @@
                         show_value_text: showValueText.checked,
                         normal_color: normalColor.value,
                         warning_color: warningColor.value,
+                        bg_color: bgColor.value,
+                        bg_gradient: bgGradient.value,
+                        bg_gradient_color: bgGradientColor.value,
+                        bg_balance: parseInt(bgBalance.value, 10) || 0,
+                        bg_softness: parseInt(bgSoftness.value, 10) || 0,
+                        value_text_color: valueTextColor.value,
+                        value_text_position: valueTextPosition.value || "auto",
+                        title_size: parseFloat(titleSize.value) || 25,
+                        gauge_outer_radius: parseFloat(gaugeOuterRadius.value) || 55,
+                        gauge_thickness: parseFloat(gaugeThickness.value) || 18,
                     };
 
-                    // Local sensor settings
+                    if (valueTextSize.value) {
+                        settings.value_text_size = parseFloat(valueTextSize.value);
+                    }
+
+                    if (titleColorCustom.checked) {
+                        settings.title_color = titleColor.value;
+                    }
+                    if (fillColorCustom.checked) {
+                        settings.graph_fill_color = fillColor.value;
+                    }
+
                     if (dataSource.value === "local") {
                         settings.metric_type = metricType.value;
-
-                        // Fan number for system fan
                         if (metricType.value === "systemfan" && fanNumber.value) {
                             settings.fan_number = parseInt(fanNumber.value);
                         }
-
-                        // Memory display mode
                         if (metricType.value === "gpuvram") {
                             settings.vram_display = vramDisplay.value;
                         }
                         if (metricType.value === "ramusage") {
                             settings.ram_display = ramDisplay.value;
                         }
-
-                        // GPU card selection for GPU metrics
                         if (["gputemp", "gpuload", "gpuvram", "gpupower"].includes(metricType.value)) {
                             if (gpuCard.value) {
                                 settings.gpu_card = gpuCard.value;
@@ -266,37 +350,20 @@
                         }
                     }
 
-                    // WebSocket settings
                     if (dataSource.value === "websocket") {
-                        if (websocketUrl.value) {
-                            settings.websocket_url = websocketUrl.value;
-                        }
-                        if (websocketApiKey.value) {
-                            settings.websocket_api_key = websocketApiKey.value;
-                        }
+                        if (websocketUrl.value) settings.websocket_url = websocketUrl.value;
+                        if (websocketApiKey.value) settings.websocket_api_key = websocketApiKey.value;
 
-                        // Collect init messages
                         const initMsgs = [];
-                        document
-                            .querySelectorAll(".init-message-input")
-                            .forEach((input) => {
-                                if (input.value.trim()) {
-                                    initMsgs.push(input.value.trim());
-                                }
-                            });
+                        document.querySelectorAll(".init-message-input").forEach((input) => {
+                            if (input.value.trim()) initMsgs.push(input.value.trim());
+                        });
                         settings.websocket_init_messages = initMsgs;
                     }
 
-                    // Common settings
-                    if (threshold.value) {
-                        settings.threshold = parseFloat(threshold.value);
-                    }
-                    if (maxValue.value) {
-                        settings.max_value = parseFloat(maxValue.value);
-                    }
-                    if (minValue.value) {
-                        settings.min_value = parseFloat(minValue.value);
-                    }
+                    if (threshold.value) settings.threshold = parseFloat(threshold.value);
+                    if (maxValue.value) settings.max_value = parseFloat(maxValue.value);
+                    if (minValue.value) settings.min_value = parseFloat(minValue.value);
 
                     websocket.send(
                         JSON.stringify({
@@ -319,8 +386,29 @@
                 margin: 16px;
                 background-color: oklch(20.5% 0 0);
             }
+            .layout {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 20px;
+                align-items: start;
+            }
+            @media (max-width: 520px) {
+                .layout {
+                    grid-template-columns: 1fr;
+                }
+            }
+            .column-title {
+                font-size: 11px;
+                font-weight: 700;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+                color: oklch(70% 0 0);
+                margin: 0 0 12px 0;
+                padding-bottom: 6px;
+                border-bottom: 1px solid oklch(40% 0 0);
+            }
             .field {
-                margin-bottom: 16px;
+                margin-bottom: 14px;
             }
             label {
                 display: block;
@@ -332,7 +420,7 @@
             select,
             textarea {
                 width: 100%;
-                padding: 8px;
+                padding: 7px 8px;
                 background-color: oklch(30% 0 0);
                 border: 1px solid oklch(40% 0 0);
                 border-radius: 4px;
@@ -345,18 +433,21 @@
                 font-family: monospace;
             }
             input[type="checkbox"] {
-                width: 20px;
-                height: 20px;
+                width: 18px;
+                height: 18px;
                 cursor: pointer;
             }
             input[type="color"] {
                 width: 100%;
-                height: 40px;
-                padding: 4px;
+                height: 34px;
+                padding: 3px;
                 background-color: oklch(30% 0 0);
                 border: 1px solid oklch(40% 0 0);
                 border-radius: 4px;
                 cursor: pointer;
+            }
+            input[type="range"] {
+                width: 100%;
             }
             .checkbox-field {
                 display: flex;
@@ -367,16 +458,20 @@
                 margin: 0;
             }
             .section-title {
-                font-size: 16px;
+                font-size: 13px;
                 font-weight: 600;
-                margin-top: 20px;
-                margin-bottom: 12px;
-                padding-bottom: 6px;
-                border-bottom: 1px solid oklch(40% 0 0);
+                margin-top: 18px;
+                margin-bottom: 10px;
+                padding-bottom: 4px;
+                border-bottom: 1px solid oklch(35% 0 0);
+                color: oklch(82% 0 0);
+            }
+            .section-title:first-child {
+                margin-top: 0;
             }
             .help-text {
-                font-size: 12px;
-                color: oklch(70% 0 0);
+                font-size: 11.5px;
+                color: oklch(65% 0 0);
                 margin-top: 4px;
             }
             .init-message-field {
@@ -402,7 +497,6 @@
                 width: 32px;
                 height: 32px;
                 padding: 0;
-                margin-top: 0;
             }
             .btn-add {
                 width: 100%;
@@ -418,7 +512,7 @@
                 gap: 8px;
                 padding: 10px 12px;
                 border-radius: 6px;
-                margin-bottom: 16px;
+                margin-bottom: 14px;
                 font-size: 13px;
                 line-height: 1.4;
             }
@@ -435,197 +529,227 @@
         </style>
     </head>
     <body>
-        <div class="field">
-            <label for="data_source">Data Source:</label>
-            <select id="data_source" onchange="dataSourceChanged();">
-                <option value="local">Local Sensors</option>
-                <option value="websocket">WebSocket</option>
-            </select>
-        </div>
+        <div class="layout">
+            <!-- LEFT COLUMN: data + behavior -->
+            <div class="column">
+                <h2 class="column-title">Data &amp; Behavior</h2>
 
-        <div id="websocket_banner" class="banner banner-warning">
-            <span class="banner-icon">⚠</span>
-            <span><strong>Experimental:</strong> WebSocket mode may not work properly in all setups.</span>
-        </div>
+                <div class="field">
+                    <label for="data_source">Data Source:</label>
+                    <select id="data_source" onchange="dataSourceChanged();">
+                        <option value="local">Local Sensors</option>
+                        <option value="websocket">WebSocket</option>
+                    </select>
+                </div>
 
-        <!-- Local Sensors Section -->
-        <div id="local_section">
-            <div class="field">
-                <label for="metric_type">Metric Type:</label>
-                <select id="metric_type" oninput="metricTypeChanged();">
-                    <option value="cputemp">CPU Temperature</option>
-                    <option value="cpupackagetemp">
-                        CPU Package Temperature
-                    </option>
-                    <option value="cpuload">CPU Load</option>
-                    <option value="gputemp">GPU Temperature</option>
-                    <option value="gpuload">GPU Load</option>
-                    <option value="gpuvram">GPU VRAM Usage</option>
-                    <option value="gpupower">GPU Power Draw</option>
-                    <option value="motherboardtemp">
-                        Motherboard Temperature
-                    </option>
-                    <option value="nvmetemp">NVMe Temperature</option>
-                    <option value="systemfan">System Fan Speed</option>
-                    <option value="cpuvoltage">CPU Voltage</option>
-                    <option value="diskwrite">Disk Write</option>
-                    <option value="diskread">Disk Read</option>
-                    <option value="ramusage">RAM Usage</option>
-                    <option value="ramtemp">RAM Temperature</option>
-                    <option value="netdownload">Network Download</option>
-                    <option value="netupload">Network Upload</option>
-                </select>
-            </div>
+                <div id="websocket_banner" class="banner banner-warning">
+                    <span class="banner-icon">⚠</span>
+                    <span><strong>Experimental:</strong> WebSocket mode may not work properly in all setups.</span>
+                </div>
 
-            <div id="fan_number_section" class="field" style="display: none">
-                <label for="fan_number">Fan Number:</label>
-                <input
-                    type="number"
-                    id="fan_number"
-                    min="1"
-                    max="20"
-                    value="1"
-                    oninput="update();"
-                />
-                <div class="help-text">
-                    Select which fan sensor to monitor (fan1, fan2, etc.)
+                <!-- Local Sensors Section -->
+                <div id="local_section">
+                    <div class="field">
+                        <label for="metric_type">Metric Type:</label>
+                        <select id="metric_type" oninput="metricTypeChanged();">
+                            <option value="cputemp">CPU Temperature</option>
+                            <option value="cpupackagetemp">CPU Package Temperature</option>
+                            <option value="cpuload">CPU Load</option>
+                            <option value="gputemp">GPU Temperature</option>
+                            <option value="gpuload">GPU Load</option>
+                            <option value="gpuvram">GPU VRAM Usage</option>
+                            <option value="gpupower">GPU Power Draw</option>
+                            <option value="motherboardtemp">Motherboard Temperature</option>
+                            <option value="nvmetemp">NVMe Temperature</option>
+                            <option value="systemfan">System Fan Speed</option>
+                            <option value="cpuvoltage">CPU Voltage</option>
+                            <option value="diskwrite">Disk Write</option>
+                            <option value="diskread">Disk Read</option>
+                            <option value="ramusage">RAM Usage</option>
+                            <option value="ramtemp">RAM Temperature</option>
+                            <option value="netdownload">Network Download</option>
+                            <option value="netupload">Network Upload</option>
+                        </select>
+                    </div>
+
+                    <div id="fan_number_section" class="field" style="display: none">
+                        <label for="fan_number">Fan Number:</label>
+                        <input type="number" id="fan_number" min="1" max="20" value="1" oninput="update();" />
+                        <div class="help-text">fan1, fan2, etc.</div>
+                    </div>
+
+                    <div id="vram_display_section" class="field" style="display: none">
+                        <label for="vram_display">VRAM Display:</label>
+                        <select id="vram_display" oninput="update();">
+                            <option value="percentage">Percentage (%)</option>
+                            <option value="gigabytes">Gigabytes (GB)</option>
+                        </select>
+                    </div>
+
+                    <div id="ram_display_section" class="field" style="display: none">
+                        <label for="ram_display">RAM Display:</label>
+                        <select id="ram_display" oninput="update();">
+                            <option value="percentage">Percentage (%)</option>
+                            <option value="gigabytes">Gigabytes (GB)</option>
+                        </select>
+                    </div>
+
+                    <div id="gpu_card_section" class="field" style="display: none">
+                        <label for="gpu_card">GPU:</label>
+                        <select id="gpu_card" oninput="update();">
+                            <option value="card0">card0 (default)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- WebSocket Section -->
+                <div id="websocket_section" style="display: none">
+                    <div class="field">
+                        <label for="websocket_url">WebSocket URL:</label>
+                        <input type="text" id="websocket_url" placeholder="ws://localhost:8080" oninput="update();" />
+                    </div>
+                    <div class="field">
+                        <label for="websocket_api_key">API Key (Optional):</label>
+                        <input type="text" id="websocket_api_key" placeholder="Enter API key" oninput="update();" />
+                    </div>
+                    <div class="field">
+                        <label>Init Messages:</label>
+                        <div id="init_messages_container"></div>
+                        <button class="btn-add" onclick="addInitMessage()">+ Add Message</button>
+                    </div>
+                </div>
+
+                <div class="section-title">Scale</div>
+                <div class="field">
+                    <label for="threshold">Warning Threshold:</label>
+                    <input type="number" id="threshold" placeholder="Auto (e.g., 80 for CPU temp)" step="0.1" oninput="update();" />
+                    <div class="help-text">Graph turns warning color when value exceeds threshold.</div>
+                </div>
+                <div class="field">
+                    <label for="min_value">Min Value:</label>
+                    <input type="number" id="min_value" placeholder="Auto (0)" step="0.1" oninput="update();" />
+                </div>
+                <div class="field">
+                    <label for="max_value">Max Value:</label>
+                    <input type="number" id="max_value" placeholder="Auto (based on metric type)" step="0.1" oninput="update();" />
                 </div>
             </div>
 
-            <div id="vram_display_section" class="field" style="display: none">
-                <label for="vram_display">VRAM Display:</label>
-                <select id="vram_display" oninput="update();">
-                    <option value="percentage">Percentage (%)</option>
-                    <option value="gigabytes">Gigabytes (GB)</option>
-                </select>
-                <div class="help-text">
-                    Show VRAM usage as percentage or absolute GB
+            <!-- RIGHT COLUMN: appearance -->
+            <div class="column">
+                <h2 class="column-title">Appearance</h2>
+
+                <div class="section-title">Display</div>
+                <div class="field">
+                    <label for="visualization_type">Visualization Type:</label>
+                    <select id="visualization_type" oninput="visualizationChanged();">
+                        <option value="graph">Graph</option>
+                        <option value="gauge">Gauge</option>
+                    </select>
+                </div>
+
+                <div class="section-title">Title</div>
+                <div class="field">
+                    <label for="title_size">Title Size (px):</label>
+                    <input type="number" id="title_size" min="8" max="50" step="1" value="25" oninput="update();" />
+                </div>
+                <div class="field checkbox-field">
+                    <input id="title_color_custom" type="checkbox" oninput="titleColorCustomChanged();" />
+                    <label for="title_color_custom">Custom Title Color</label>
+                </div>
+                <div id="title_color_field" class="field" style="display: none">
+                    <label for="title_color">Title Color:</label>
+                    <input type="color" id="title_color" value="#00ff00" oninput="update();" />
+                    <div class="help-text">Otherwise follows normal/warning state color.</div>
+                </div>
+
+                <div class="section-title">Current Value</div>
+                <div class="field checkbox-field">
+                    <input id="show_value_text" type="checkbox" oninput="update();" />
+                    <label for="show_value_text">Show Current Value</label>
+                </div>
+                <div class="field">
+                    <label for="value_text_position">Position:</label>
+                    <select id="value_text_position" oninput="update();">
+                        <option value="auto">Auto (bottom for graph, center for gauge)</option>
+                        <option value="top">Top</option>
+                        <option value="center">Center</option>
+                        <option value="bottom">Bottom</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label for="value_text_size">Size (px):</label>
+                    <input type="number" id="value_text_size" min="8" max="50" step="1" placeholder="Auto (22 graph / 26 gauge)" oninput="update();" />
+                </div>
+                <div class="field">
+                    <label for="value_text_color">Color:</label>
+                    <input type="color" id="value_text_color" value="#ffffff" oninput="update();" />
+                </div>
+
+                <div class="section-title">Colors</div>
+                <div class="field">
+                    <label for="normal_color">Normal Color:</label>
+                    <input type="color" id="normal_color" value="#00ff00" oninput="update();" />
+                    <div class="help-text">Line / arc color when below threshold.</div>
+                </div>
+                <div class="field">
+                    <label for="warning_color">Warning Color:</label>
+                    <input type="color" id="warning_color" value="#ff0000" oninput="update();" />
+                </div>
+                <div class="field checkbox-field">
+                    <input id="fill_color_custom" type="checkbox" oninput="fillColorCustomChanged();" />
+                    <label for="fill_color_custom">Custom Graph Fill Color</label>
+                </div>
+                <div id="fill_color_field" class="field" style="display: none">
+                    <label for="fill_color">Graph Fill Color:</label>
+                    <input type="color" id="fill_color" value="#00ff00" oninput="update();" />
+                    <div class="help-text">Overrides the area-under-line color in graph mode.</div>
+                </div>
+
+                <div id="gauge_section" style="display: none">
+                    <div class="section-title">Gauge Geometry</div>
+                    <div class="field">
+                        <label for="gauge_outer_radius">Outer Radius (px):</label>
+                        <input type="number" id="gauge_outer_radius" min="20" max="70" step="1" value="55" oninput="update();" />
+                        <div class="help-text">Larger = arc closer to the edge (max 70).</div>
+                    </div>
+                    <div class="field">
+                        <label for="gauge_thickness">Arc Thickness (px):</label>
+                        <input type="number" id="gauge_thickness" min="2" max="40" step="1" value="18" oninput="update();" />
+                        <div class="help-text">Smaller = thinner ring, leaves room for centered value text.</div>
+                    </div>
+                </div>
+
+                <div class="section-title">Background</div>
+                <div class="field">
+                    <label for="bg_color">Background Color:</label>
+                    <input type="color" id="bg_color" value="#000000" oninput="update();" />
+                </div>
+                <div class="field">
+                    <label for="bg_gradient">Gradient:</label>
+                    <select id="bg_gradient" oninput="bgGradientChanged();">
+                        <option value="none">None</option>
+                        <option value="linear">Linear (vertical)</option>
+                        <option value="radial">Radial</option>
+                    </select>
+                </div>
+                <div id="gradient_fields_section" style="display: none">
+                    <div class="field">
+                        <label for="bg_gradient_color">Gradient Second Color:</label>
+                        <input type="color" id="bg_gradient_color" value="#202020" oninput="update();" />
+                    </div>
+                    <div class="field">
+                        <label for="bg_balance">Balance: <span id="bg_balance_value"></span></label>
+                        <input type="range" id="bg_balance" min="0" max="100" value="50"
+                               oninput="document.getElementById('bg_balance_value').textContent = this.value; update();" />
+                    </div>
+                    <div class="field">
+                        <label for="bg_softness">Softness: <span id="bg_softness_value"></span></label>
+                        <input type="range" id="bg_softness" min="0" max="100" value="50"
+                               oninput="document.getElementById('bg_softness_value').textContent = this.value; update();" />
+                    </div>
                 </div>
             </div>
-
-            <div id="ram_display_section" class="field" style="display: none">
-                <label for="ram_display">RAM Display:</label>
-                <select id="ram_display" oninput="update();">
-                    <option value="percentage">Percentage (%)</option>
-                    <option value="gigabytes">Gigabytes (GB)</option>
-                </select>
-                <div class="help-text">
-                    Show RAM usage as percentage or absolute GB
-                </div>
-            </div>
-
-            <div id="gpu_card_section" class="field" style="display: none">
-                <label for="gpu_card">GPU:</label>
-                <select id="gpu_card" oninput="update();">
-                    <option value="card0">card0 (default)</option>
-                </select>
-                <div class="help-text">
-                    Select which GPU to monitor
-                </div>
-            </div>
-        </div>
-
-        <!-- WebSocket Section -->
-        <div id="websocket_section" style="display: none">
-            <div class="field">
-                <label for="websocket_url">WebSocket URL:</label>
-                <input
-                    type="text"
-                    id="websocket_url"
-                    placeholder="ws://localhost:8080"
-                    oninput="update();"
-                />
-            </div>
-
-            <div class="field">
-                <label for="websocket_api_key">API Key (Optional):</label>
-                <input
-                    type="text"
-                    id="websocket_api_key"
-                    placeholder="Enter API key"
-                    oninput="update();"
-                />
-            </div>
-
-            <div class="field">
-                <label>Init Messages:</label>
-                <div id="init_messages_container"></div>
-                <button class="btn-add" onclick="addInitMessage()">
-                    + Add Message
-                </button>
-            </div>
-        </div>
-
-        <!-- Display Settings -->
-        <div class="section-title">Display Settings</div>
-        <div class="field">
-            <label for="visualization_type">Visualization Type:</label>
-            <select id="visualization_type" oninput="update();">
-                <option value="graph">Graph</option>
-                <option value="gauge">Gauge</option>
-            </select>
-        </div>
-        <div class="field checkbox-field">
-            <input id="show_value_text" type="checkbox" oninput="update();" />
-            <label for="show_value_text">Show Current Value</label>
-        </div>
-
-        <!-- Graph Settings -->
-        <div class="section-title">Graph Settings</div>
-        <div class="field">
-            <label for="threshold">Warning Threshold:</label>
-            <input
-                type="number"
-                id="threshold"
-                placeholder="Auto (e.g., 80 for CPU temp)"
-                step="0.1"
-                oninput="update();"
-            />
-            <div class="help-text">
-                Graph turns warning color when value exceeds threshold
-            </div>
-        </div>
-
-        <div class="field">
-            <label for="normal_color">Normal Color:</label>
-            <input
-                type="color"
-                id="normal_color"
-                value="#00ff00"
-                oninput="update();"
-            />
-        </div>
-
-        <div class="field">
-            <label for="warning_color">Warning Color:</label>
-            <input
-                type="color"
-                id="warning_color"
-                value="#ff0000"
-                oninput="update();"
-            />
-        </div>
-
-        <div class="field">
-            <label for="min_value">Min Value:</label>
-            <input
-                type="number"
-                id="min_value"
-                placeholder="Auto (0)"
-                step="0.1"
-                oninput="update();"
-            />
-        </div>
-
-        <div class="field">
-            <label for="max_value">Max Value:</label>
-            <input
-                type="number"
-                id="max_value"
-                placeholder="Auto (based on metric type)"
-                step="0.1"
-                oninput="update();"
-            />
         </div>
     </body>
 </html>

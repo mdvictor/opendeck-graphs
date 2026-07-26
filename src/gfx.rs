@@ -1,4 +1,4 @@
-use ab_glyph::{FontRef, PxScale};
+use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
 use anyhow::Result;
 use base64::{engine::general_purpose, Engine as _};
 use image::{Rgba, RgbaImage};
@@ -8,6 +8,8 @@ use std::io::Cursor;
 const ICON_SIZE: u32 = 144;
 const GRAPH_PADDING: u32 = 10;
 const TITLE_HEIGHT: u32 = 35;
+pub const DEFAULT_GAUGE_OUTER_RADIUS: f32 = 55.0;
+pub const DEFAULT_GAUGE_THICKNESS: f32 = 18.0;
 
 /// Color scheme for graph based on threshold
 #[derive(Clone, Copy)]
@@ -25,6 +27,43 @@ impl Default for ColorScheme {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum GradientType {
+    None,
+    Linear,
+    Radial,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ValuePos {
+    /// Bottom for graph view, center for gauge view.
+    Auto,
+    Top,
+    Center,
+    Bottom,
+}
+
+#[derive(Clone, Copy)]
+pub struct BackgroundConfig {
+    pub color1: Rgba<u8>,
+    pub color2: Rgba<u8>,
+    pub gradient: GradientType,
+    pub balance: u8,
+    pub softness: u8,
+}
+
+impl Default for BackgroundConfig {
+    fn default() -> Self {
+        Self {
+            color1: Rgba([0, 0, 0, 255]),
+            color2: Rgba([32, 32, 32, 255]),
+            gradient: GradientType::None,
+            balance: 50,
+            softness: 50,
+        }
+    }
+}
+
 /// Configuration for rendering a graph
 pub struct GraphConfig {
     pub data_points: Vec<f32>,
@@ -33,6 +72,25 @@ pub struct GraphConfig {
     pub threshold: Option<f32>,
     pub color_scheme: ColorScheme,
     pub title: String,
+    pub background: BackgroundConfig,
+    /// Override for the metric title color. Falls back to the active line color.
+    pub title_color: Option<Rgba<u8>>,
+    /// Override for the area-under-line fill color. Falls back to the active line color.
+    pub fill_color: Option<Rgba<u8>>,
+    /// Color used when drawing the current-value text into the image.
+    pub value_text_color: Rgba<u8>,
+    /// Formatted value string to render into the image (e.g. "75.5°C"). None = don't draw.
+    pub value_text: Option<String>,
+    /// Where to place the value text inside the icon.
+    pub value_text_position: ValuePos,
+    /// Font size (px) for the value text.
+    pub value_text_size: f32,
+    /// Font size (px) for the metric title.
+    pub title_size: f32,
+    /// Outer radius of the gauge arc, in pixels.
+    pub gauge_outer_radius: f32,
+    /// Thickness of the gauge arc, in pixels.
+    pub gauge_thickness: f32,
 }
 
 impl Default for GraphConfig {
@@ -44,13 +102,23 @@ impl Default for GraphConfig {
             threshold: None,
             color_scheme: ColorScheme::default(),
             title: String::new(),
+            background: BackgroundConfig::default(),
+            title_color: None,
+            fill_color: None,
+            value_text_color: Rgba([255, 255, 255, 255]),
+            value_text: None,
+            value_text_position: ValuePos::Auto,
+            value_text_size: 22.0,
+            title_size: 25.0,
+            gauge_outer_radius: DEFAULT_GAUGE_OUTER_RADIUS,
+            gauge_thickness: DEFAULT_GAUGE_THICKNESS,
         }
     }
 }
 
 /// Generate a timeseries graph image with gradient fill
 pub fn generate_graph(config: &GraphConfig) -> Result<RgbaImage> {
-    let mut img = RgbaImage::from_pixel(ICON_SIZE, ICON_SIZE, Rgba([0, 0, 0, 255]));
+    let mut img = fill_background(&config.background);
 
     if config.data_points.is_empty() {
         return Ok(img);
@@ -69,9 +137,11 @@ pub fn generate_graph(config: &GraphConfig) -> Result<RgbaImage> {
     } else {
         config.color_scheme.normal_color
     };
+    let title_color = config.title_color.unwrap_or(line_color);
+    let fill_color = config.fill_color.unwrap_or(line_color);
 
     // Draw title at the top center
-    draw_title(&mut img, &config.title, &line_color);
+    draw_title(&mut img, &config.title, &title_color, config.title_size);
 
     // Normalize data points to graph coordinates
     let points = normalize_points(
@@ -89,7 +159,7 @@ pub fn generate_graph(config: &GraphConfig) -> Result<RgbaImage> {
         GRAPH_PADDING,
         GRAPH_PADDING + TITLE_HEIGHT,
         graph_height,
-        &line_color,
+        &fill_color,
     );
 
     // Draw the connected line
@@ -100,6 +170,18 @@ pub fn generate_graph(config: &GraphConfig) -> Result<RgbaImage> {
         GRAPH_PADDING + TITLE_HEIGHT,
         &line_color,
     );
+
+    if let Some(text) = &config.value_text {
+        draw_value_text(
+            &mut img,
+            text,
+            config.value_text_position,
+            config.value_text_size,
+            &config.value_text_color,
+            false,
+            0.0,
+        );
+    }
 
     Ok(img)
 }
@@ -316,24 +398,18 @@ fn blend_colors(bg: Rgba<u8>, fg: Rgba<u8>) -> Rgba<u8> {
     Rgba([r, g, b, a])
 }
 
-/// Draw title text centered at the top of the image with larger font
-fn draw_title(img: &mut RgbaImage, title: &str, color: &Rgba<u8>) {
-    // Use embedded DejaVu Sans font
+/// Draw title text centered at the top of the image.
+fn draw_title(img: &mut RgbaImage, title: &str, color: &Rgba<u8>, size: f32) {
     let font_data = include_bytes!("../fonts/DejaVuSans.ttf");
     let font = match FontRef::try_from_slice(font_data) {
         Ok(f) => f,
-        Err(_) => return, // Silently fail if font not available
+        Err(_) => return,
     };
-
-    let scale = PxScale::from(25.0); // Larger font size
-    let text_color = *color;
-
-    // Calculate text width for centering
-    let text_width = title.len() as f32 * 12.5; // Rough estimate
-    let x_offset = ((ICON_SIZE as f32 - text_width) / 2.0).max(5.0) as i32;
-    let y_offset = 8; // Top padding
-
-    draw_text_mut(img, text_color, x_offset, y_offset, scale, &font, title);
+    let scale = PxScale::from(size.clamp(8.0, 60.0));
+    let width = measure_text_width(&font, scale, title);
+    let x = ((ICON_SIZE as f32 - width) / 2.0).max(2.0).round() as i32;
+    let y = 8; // top padding
+    draw_text_mut(img, *color, x, y, scale, &font, title);
 }
 
 /// Convert image to base64 data URI
@@ -348,7 +424,7 @@ pub fn image_to_data_uri(img: &RgbaImage) -> Result<String> {
 
 /// Generate a gauge visualization
 pub fn generate_gauge(config: &GraphConfig) -> Result<RgbaImage> {
-    let mut img = RgbaImage::from_pixel(ICON_SIZE, ICON_SIZE, Rgba([0, 0, 0, 255]));
+    let mut img = fill_background(&config.background);
 
     if config.data_points.is_empty() {
         return Ok(img);
@@ -357,20 +433,23 @@ pub fn generate_gauge(config: &GraphConfig) -> Result<RgbaImage> {
     let current_value = config.data_points.last().copied().unwrap_or(0.0);
     let is_warning = config.threshold.map(|t| current_value > t).unwrap_or(false);
 
-    let text_color = if is_warning {
+    let active_color = if is_warning {
         config.color_scheme.warning_color
     } else {
         config.color_scheme.normal_color
     };
+    let title_color = config.title_color.unwrap_or(active_color);
 
     // Draw title at the top
-    draw_title(&mut img, &config.title, &text_color);
+    draw_title(&mut img, &config.title, &title_color, config.title_size);
 
     // Calculate gauge parameters for a horseshoe-shaped meter
     let center_x = ICON_SIZE / 2;
     let center_y = ICON_SIZE / 2 + 15; // Position center to keep arc within bounds
-    let outer_radius = 55.0;
-    let arc_thickness = 18.0; // Thick arc for better visibility
+    let outer_radius = config.gauge_outer_radius.clamp(20.0, 70.0);
+    let arc_thickness = config
+        .gauge_thickness
+        .clamp(2.0, outer_radius - 4.0);
     let inner_radius = outer_radius - arc_thickness;
 
     let start_angle = 135.0_f32.to_radians(); // Start at 135° for symmetric horseshoe
@@ -469,6 +548,18 @@ pub fn generate_gauge(config: &GraphConfig) -> Result<RgbaImage> {
         &fill_color,
     );
 
+    if let Some(text) = &config.value_text {
+        draw_value_text(
+            &mut img,
+            text,
+            config.value_text_position,
+            config.value_text_size,
+            &config.value_text_color,
+            true,
+            center_y as f32,
+        );
+    }
+
     Ok(img)
 }
 
@@ -545,4 +636,254 @@ pub fn generate_graph_data_uri(config: &GraphConfig) -> Result<String> {
 pub fn generate_gauge_data_uri(config: &GraphConfig) -> Result<String> {
     let img = generate_gauge(config)?;
     image_to_data_uri(&img)
+}
+
+/// Fill the entire icon with the configured background (solid or gradient).
+fn fill_background(bg: &BackgroundConfig) -> RgbaImage {
+    match bg.gradient {
+        GradientType::None => RgbaImage::from_pixel(ICON_SIZE, ICON_SIZE, bg.color1),
+        GradientType::Linear | GradientType::Radial => {
+            // Match SVG-style stops as in nvidia-gpu-stats: midpoint in 25..75, half-width in 0..50
+            let midpoint = (bg.balance.min(100) as f32) / 100.0 * 0.5 + 0.25;
+            let half_width = (bg.softness.min(100) as f32) / 100.0 * 0.5;
+            let stop1 = (midpoint - half_width).clamp(0.0, 1.0);
+            let stop2 = (midpoint + half_width).clamp(0.0, 1.0);
+
+            let cx = ICON_SIZE as f32 / 2.0;
+            let cy = ICON_SIZE as f32 / 2.0;
+            // Use ~70% of half-size as the gradient radius, matching the SVG reference (r="70%")
+            let max_radial = (ICON_SIZE as f32 / 2.0) * 0.7;
+
+            let mut img = RgbaImage::new(ICON_SIZE, ICON_SIZE);
+            for y in 0..ICON_SIZE {
+                for x in 0..ICON_SIZE {
+                    let offset = match bg.gradient {
+                        GradientType::Radial => {
+                            let dx = x as f32 - cx;
+                            let dy = y as f32 - cy;
+                            ((dx * dx + dy * dy).sqrt() / max_radial).clamp(0.0, 1.0)
+                        }
+                        // Linear vertical (top → bottom)
+                        _ => y as f32 / (ICON_SIZE - 1) as f32,
+                    };
+
+                    let color = interpolate_stops(offset, stop1, stop2, bg.color1, bg.color2);
+                    img.put_pixel(x, y, color);
+                }
+            }
+            img
+        }
+    }
+}
+
+/// Linearly interpolate between two SVG-style stops.
+fn interpolate_stops(
+    offset: f32,
+    stop1: f32,
+    stop2: f32,
+    color1: Rgba<u8>,
+    color2: Rgba<u8>,
+) -> Rgba<u8> {
+    if offset <= stop1 {
+        return color1;
+    }
+    if offset >= stop2 {
+        return color2;
+    }
+    let span = (stop2 - stop1).max(1e-6);
+    let t = ((offset - stop1) / span).clamp(0.0, 1.0);
+    let lerp = |a: u8, b: u8| {
+        (a as f32 + (b as f32 - a as f32) * t).round().clamp(0.0, 255.0) as u8
+    };
+    Rgba([
+        lerp(color1[0], color2[0]),
+        lerp(color1[1], color2[1]),
+        lerp(color1[2], color2[2]),
+        lerp(color1[3], color2[3]),
+    ])
+}
+
+/// Measure rendered width of `text` at the given scale using the embedded font.
+fn measure_text_width(font: &FontRef, scale: PxScale, text: &str) -> f32 {
+    let scaled = font.as_scaled(scale);
+    text.chars()
+        .map(|c| scaled.h_advance(font.glyph_id(c)))
+        .sum()
+}
+
+/// Resolve `ValuePos::Auto` based on visualization (gauge → Center, graph → Bottom).
+fn resolve_value_pos(pos: ValuePos, is_gauge: bool) -> ValuePos {
+    match pos {
+        ValuePos::Auto => {
+            if is_gauge {
+                ValuePos::Center
+            } else {
+                ValuePos::Bottom
+            }
+        }
+        other => other,
+    }
+}
+
+/// Draw the current value centered horizontally, at the requested vertical position.
+fn draw_value_text(
+    img: &mut RgbaImage,
+    text: &str,
+    pos: ValuePos,
+    size: f32,
+    color: &Rgba<u8>,
+    is_gauge: bool,
+    gauge_center_y: f32,
+) {
+    let font_data = include_bytes!("../fonts/DejaVuSans.ttf");
+    let font = match FontRef::try_from_slice(font_data) {
+        Ok(f) => f,
+        Err(_) => return,
+    };
+    let scale = PxScale::from(size.clamp(8.0, 60.0));
+    let width = measure_text_width(&font, scale, text);
+    let scaled = font.as_scaled(scale);
+    let ascent = scaled.ascent();
+    let descent = scaled.descent();
+    let height = ascent - descent;
+
+    let x = ((ICON_SIZE as f32 - width) / 2.0).round() as i32;
+    let resolved = resolve_value_pos(pos, is_gauge);
+    let y = match resolved {
+        ValuePos::Top => 6,
+        ValuePos::Center => {
+            // For gauge, center on the ring's center for visual alignment; for graph use icon midpoint.
+            let cy = if is_gauge {
+                gauge_center_y
+            } else {
+                ICON_SIZE as f32 / 2.0
+            };
+            (cy - height / 2.0).round() as i32
+        }
+        ValuePos::Bottom => (ICON_SIZE as f32 - height - 6.0).round() as i32,
+        ValuePos::Auto => unreachable!(),
+    };
+    draw_text_mut(img, *color, x, y, scale, &font, text);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_points() -> Vec<f32> {
+        (0..60)
+            .map(|i| {
+                let t = i as f32 / 60.0;
+                40.0 + 35.0 * (t * std::f32::consts::TAU).sin().abs() + (i as f32 * 0.3) % 5.0
+            })
+            .collect()
+    }
+
+    fn write_png(name: &str, img: &RgbaImage) {
+        let path = format!("/tmp/opendeck-graphs-preview/{}.png", name);
+        std::fs::create_dir_all("/tmp/opendeck-graphs-preview").unwrap();
+        img.save(&path).unwrap();
+        println!("wrote {}", path);
+    }
+
+    #[test]
+    fn render_preview_samples() {
+        let base_data = sample_points();
+
+        let base = || GraphConfig {
+            data_points: base_data.clone(),
+            max_value: 100.0,
+            min_value: 0.0,
+            threshold: Some(80.0),
+            color_scheme: ColorScheme {
+                normal_color: Rgba([0, 220, 130, 255]),
+                warning_color: Rgba([255, 80, 80, 255]),
+            },
+            title: "CPU Temp".to_string(),
+            value_text: Some("75.5°C".to_string()),
+            ..Default::default()
+        };
+
+        // 1. Solid black bg (baseline)
+        let cfg = base();
+        write_png("graph_solid_black", &generate_graph(&cfg).unwrap());
+        write_png("gauge_solid_black", &generate_gauge(&cfg).unwrap());
+
+        // 2. Linear vertical gradient
+        let mut cfg = base();
+        cfg.background = BackgroundConfig {
+            color1: Rgba([12, 18, 28, 255]),
+            color2: Rgba([60, 80, 120, 255]),
+            gradient: GradientType::Linear,
+            balance: 50,
+            softness: 60,
+        };
+        write_png("graph_linear", &generate_graph(&cfg).unwrap());
+        write_png("gauge_linear", &generate_gauge(&cfg).unwrap());
+
+        // 3. Radial gradient
+        let mut cfg = base();
+        cfg.background = BackgroundConfig {
+            color1: Rgba([40, 50, 80, 255]),
+            color2: Rgba([5, 5, 10, 255]),
+            gradient: GradientType::Radial,
+            balance: 50,
+            softness: 70,
+        };
+        write_png("graph_radial", &generate_graph(&cfg).unwrap());
+        write_png("gauge_radial", &generate_gauge(&cfg).unwrap());
+
+        // 4. Thin external gauge with bg
+        let mut cfg = base();
+        cfg.background = BackgroundConfig {
+            color1: Rgba([20, 20, 30, 255]),
+            color2: Rgba([5, 5, 10, 255]),
+            gradient: GradientType::Radial,
+            balance: 50,
+            softness: 70,
+        };
+        cfg.gauge_outer_radius = 68.0;
+        cfg.gauge_thickness = 6.0;
+        cfg.value_text_color = Rgba([240, 240, 255, 255]);
+        write_png("gauge_thin_external", &generate_gauge(&cfg).unwrap());
+
+        // 5. Custom title + fill colors
+        let mut cfg = base();
+        cfg.background = BackgroundConfig {
+            color1: Rgba([20, 20, 30, 255]),
+            ..Default::default()
+        };
+        cfg.title_color = Some(Rgba([200, 200, 200, 255]));
+        cfg.fill_color = Some(Rgba([255, 180, 50, 255]));
+        write_png("graph_custom_colors", &generate_graph(&cfg).unwrap());
+
+        // 6. Value text at top (graph)
+        let mut cfg = base();
+        cfg.value_text_position = ValuePos::Top;
+        cfg.value_text_size = 28.0;
+        cfg.title = String::new(); // hide title to avoid overlap
+        write_png("graph_value_top_big", &generate_graph(&cfg).unwrap());
+
+        // 7. Value at center, larger (graph)
+        let mut cfg = base();
+        cfg.value_text_position = ValuePos::Center;
+        cfg.value_text_size = 30.0;
+        cfg.value_text_color = Rgba([255, 240, 200, 255]);
+        write_png("graph_value_center_big", &generate_graph(&cfg).unwrap());
+
+        // 8. Title and value both larger (graph)
+        let mut cfg = base();
+        cfg.title_size = 18.0;
+        cfg.value_text_size = 30.0;
+        cfg.value_text_position = ValuePos::Bottom;
+        write_png("graph_small_title_big_value", &generate_graph(&cfg).unwrap());
+
+        // 9. Gauge with value at bottom instead of center
+        let mut cfg = base();
+        cfg.gauge_outer_radius = 55.0;
+        cfg.gauge_thickness = 14.0;
+        cfg.value_text_position = ValuePos::Bottom;
+        cfg.value_text_size = 24.0;
+        write_png("gauge_value_bottom", &generate_gauge(&cfg).unwrap());
+    }
 }

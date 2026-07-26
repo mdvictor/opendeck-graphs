@@ -1,4 +1,7 @@
-use crate::gfx::{ColorScheme, GraphConfig};
+use crate::gfx::{
+    BackgroundConfig, ColorScheme, GradientType, GraphConfig, ValuePos, DEFAULT_GAUGE_OUTER_RADIUS,
+    DEFAULT_GAUGE_THICKNESS,
+};
 use crate::websocket::{WebSocketClient, WebSocketConfig};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -30,6 +33,46 @@ pub enum MemoryDisplay {
     #[default]
     Percentage,
     Gigabytes,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum BgGradient {
+    #[default]
+    None,
+    Linear,
+    Radial,
+}
+
+impl From<BgGradient> for GradientType {
+    fn from(value: BgGradient) -> Self {
+        match value {
+            BgGradient::None => GradientType::None,
+            BgGradient::Linear => GradientType::Linear,
+            BgGradient::Radial => GradientType::Radial,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ValueTextPos {
+    #[default]
+    Auto,
+    Top,
+    Center,
+    Bottom,
+}
+
+impl From<ValueTextPos> for ValuePos {
+    fn from(value: ValueTextPos) -> Self {
+        match value {
+            ValueTextPos::Auto => ValuePos::Auto,
+            ValueTextPos::Top => ValuePos::Top,
+            ValueTextPos::Center => ValuePos::Center,
+            ValueTextPos::Bottom => ValuePos::Bottom,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -164,6 +207,27 @@ pub struct GraphSettings {
     // Memory display mode (percentage vs gigabytes)
     pub vram_display: MemoryDisplay,
     pub ram_display: MemoryDisplay,
+
+    // Background customization
+    pub bg_color: Option<String>,
+    pub bg_gradient_color: Option<String>,
+    pub bg_gradient: BgGradient,
+    pub bg_balance: Option<u8>,
+    pub bg_softness: Option<u8>,
+
+    // Optional color overrides (empty/None = use line color or default)
+    pub title_color: Option<String>,
+    pub graph_fill_color: Option<String>,
+    pub value_text_color: Option<String>,
+
+    // Sizes (px) and positioning
+    pub title_size: Option<f32>,
+    pub value_text_size: Option<f32>,
+    pub value_text_position: ValueTextPos,
+
+    // Gauge geometry overrides
+    pub gauge_outer_radius: Option<f32>,
+    pub gauge_thickness: Option<f32>,
 }
 
 impl GraphSettings {
@@ -245,6 +309,41 @@ impl GraphData {
             DataSource::WebSocket => "WebSocket".to_string(),
         };
 
+        let background = BackgroundConfig {
+            color1: self
+                .settings
+                .bg_color
+                .as_deref()
+                .and_then(parse_hex_color)
+                .unwrap_or(BackgroundConfig::default().color1),
+            color2: self
+                .settings
+                .bg_gradient_color
+                .as_deref()
+                .and_then(parse_hex_color)
+                .unwrap_or(BackgroundConfig::default().color2),
+            gradient: self.settings.bg_gradient.into(),
+            balance: self.settings.bg_balance.unwrap_or(50),
+            softness: self.settings.bg_softness.unwrap_or(50),
+        };
+
+        let title_color = self
+            .settings
+            .title_color
+            .as_deref()
+            .and_then(parse_hex_color);
+        let fill_color = self
+            .settings
+            .graph_fill_color
+            .as_deref()
+            .and_then(parse_hex_color);
+        let value_text_color = self
+            .settings
+            .value_text_color
+            .as_deref()
+            .and_then(parse_hex_color)
+            .unwrap_or(image::Rgba([255, 255, 255, 255]));
+
         GraphConfig {
             data_points: self.data_points.iter().copied().collect(),
             max_value: self
@@ -286,7 +385,53 @@ impl GraphData {
                 warning_color,
             },
             title,
+            background,
+            title_color,
+            fill_color,
+            value_text_color,
+            value_text: self.formatted_value_text(),
+            value_text_position: self.settings.value_text_position.into(),
+            value_text_size: self.settings.value_text_size.unwrap_or_else(|| {
+                // Preserve historical defaults: 22 for graph (bottom), 26 for gauge (center).
+                match self.settings.visualization_type {
+                    VisualizationType::Gauge => 26.0,
+                    VisualizationType::Graph => 22.0,
+                }
+            }),
+            title_size: self.settings.title_size.unwrap_or(25.0),
+            gauge_outer_radius: self
+                .settings
+                .gauge_outer_radius
+                .unwrap_or(DEFAULT_GAUGE_OUTER_RADIUS),
+            gauge_thickness: self
+                .settings
+                .gauge_thickness
+                .unwrap_or(DEFAULT_GAUGE_THICKNESS),
         }
+    }
+
+    /// Format the current value (last data point) for in-image rendering, if enabled.
+    pub fn formatted_value_text(&self) -> Option<String> {
+        if !self.settings.show_value_text {
+            return None;
+        }
+        let value = *self.data_points.back()?;
+        if self.settings.memory_display() == MemoryDisplay::Gigabytes {
+            let total = match self.settings.metric_type {
+                MetricType::GpuVram => self.vram_total_gb,
+                MetricType::RamUsage => self.ram_total_gb,
+                _ => None,
+            };
+            if let Some(total) = total {
+                return Some(format!("{:.1}/{:.0}GB", value, total));
+            }
+            return Some(format!("{:.1}GB", value));
+        }
+        let suffix = match self.settings.data_source {
+            DataSource::Local => self.settings.effective_suffix(),
+            DataSource::WebSocket => "",
+        };
+        Some(format!("{:.1}{}", value, suffix))
     }
 
     pub async fn initialize_websocket(&mut self) -> Result<()> {
