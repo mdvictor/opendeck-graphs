@@ -18,11 +18,12 @@ lazy_static! {
 }
 
 async fn read_sensor_value(
+    instance_id: &str,
     settings: &GraphSettings,
     ws_client: Option<&Arc<WebSocketClient>>,
 ) -> Result<f32> {
     match settings.data_source {
-        DataSource::Local => read_local_sensor_value(settings).await,
+        DataSource::Local => read_local_sensor_value(instance_id, settings).await,
         DataSource::WebSocket => {
             if let Some(client) = ws_client {
                 Ok(client.get_value().await)
@@ -33,7 +34,7 @@ async fn read_sensor_value(
     }
 }
 
-async fn read_local_sensor_value(settings: &GraphSettings) -> Result<f32> {
+async fn read_local_sensor_value(instance_id: &str, settings: &GraphSettings) -> Result<f32> {
     match settings.metric_type {
         MetricType::CpuTemp | MetricType::CpuPackageTemp => sensors::find_cpu_temperature().await,
         MetricType::CpuLoad => sensors::find_cpu_load().await,
@@ -70,8 +71,8 @@ async fn read_local_sensor_value(settings: &GraphSettings) -> Result<f32> {
                 MemoryDisplay::Gigabytes => sensors::find_ram_usage_gb().await,
             }
         }
-        MetricType::NetDownload => sensors::find_net_download().await,
-        MetricType::NetUpload => sensors::find_net_upload().await,
+        MetricType::NetDownload => sensors::find_net_download(instance_id, settings.net_interface.as_deref()).await,
+        MetricType::NetUpload => sensors::find_net_upload(instance_id, settings.net_interface.as_deref()).await,
         MetricType::RamTemp => sensors::find_ram_temperature().await,
     }
 }
@@ -133,6 +134,22 @@ impl Action for GraphAction {
             .send_to_property_inspector(serde_json::json!({
                 "event": "gpuList",
                 "gpus": gpu_list,
+            }))
+            .await;
+
+        let net_list: Vec<serde_json::Value> = sensors::list_net_interfaces()
+            .iter()
+            .map(|n| {
+                serde_json::json!({
+                    "name": n.name,
+                    "physical": n.physical,
+                })
+            })
+            .collect();
+        let _ = instance
+            .send_to_property_inspector(serde_json::json!({
+                "event": "netList",
+                "interfaces": net_list,
             }))
             .await;
         Ok(())
@@ -208,7 +225,7 @@ pub async fn start_sensor_monitoring() {
 
                     let ws_client = graph_data.get_ws_client();
 
-                    if let Ok(value) = read_sensor_value(&graph_data.settings, ws_client).await {
+                    if let Ok(value) = read_sensor_value(&instance_id, &graph_data.settings, ws_client).await {
                         graph_data.add_data_point(value);
 
                         let config = graph_data.get_graph_config();

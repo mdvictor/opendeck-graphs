@@ -35,6 +35,8 @@
                 const ramDisplaySection = document.getElementById("ram_display_section");
                 const gpuCardSection = document.getElementById("gpu_card_section");
                 const gpuCard = document.getElementById("gpu_card");
+                const netInterfaceSection = document.getElementById("net_interface_section");
+                const netInterface = document.getElementById("net_interface");
                 const threshold = document.getElementById("threshold");
                 const maxValue = document.getElementById("max_value");
                 const minValue = document.getElementById("min_value");
@@ -74,6 +76,9 @@
                 applySettings(settings);
 
                 let savedGpuCard = settings.gpu_card || "";
+                let savedNetInterface = settings.net_interface || "physical";
+                ensureNetOption(savedNetInterface);
+                netInterface.value = savedNetInterface;
 
                 const initMessages = settings.websocket_init_messages || [];
                 renderInitMessages(initMessages);
@@ -89,12 +94,17 @@
                         if (gpuCard.options.length > 0) {
                             gpuCard.value = savedGpuCard;
                         }
+                        savedNetInterface = s.net_interface || "physical";
+                        ensureNetOption(savedNetInterface);
+                        netInterface.value = savedNetInterface;
                         renderInitMessages(s.websocket_init_messages || []);
                         refreshDynamicSections();
                     } else if (data.event == "sendToPropertyInspector") {
                         const payload = data.payload || {};
                         if (payload.event === "gpuList") {
                             populateGpuList(payload.gpus || [], savedGpuCard);
+                        } else if (payload.event === "netList") {
+                            populateNetList(payload.interfaces || [], savedNetInterface);
                         }
                     }
                 };
@@ -152,6 +162,7 @@
                     toggleDataSourceSections();
                     toggleFanNumberSection();
                     toggleGpuCardSection();
+                    toggleNetInterfaceSection();
                     toggleVramDisplaySection();
                     toggleRamDisplaySection();
                     toggleGradientFields();
@@ -177,6 +188,33 @@
                     if (selectedCard) {
                         gpuCard.value = selectedCard;
                     }
+                }
+
+                function addNetOption(value, text) {
+                    const opt = document.createElement("option");
+                    opt.value = value;
+                    opt.textContent = text;
+                    netInterface.appendChild(opt);
+                }
+
+                // Keep a saved interface selectable even when it is not in the list (yet / anymore)
+                function ensureNetOption(value) {
+                    if (!value) return;
+                    const exists = Array.from(netInterface.options).some((o) => o.value === value);
+                    if (!exists) addNetOption(value, value + " (not found)");
+                }
+
+                function populateNetList(interfaces, saved) {
+                    // Prefer what is currently selected over the last saved value
+                    const selected = netInterface.value || saved || "physical";
+                    netInterface.innerHTML = "";
+                    addNetOption("all", "All interfaces");
+                    addNetOption("physical", "Physical interfaces");
+                    interfaces.forEach((iface) => {
+                        addNetOption(iface.name, iface.physical ? iface.name : iface.name + " (virtual)");
+                    });
+                    ensureNetOption(selected);
+                    netInterface.value = selected;
                 }
 
                 function toggleDataSourceSections() {
@@ -217,6 +255,14 @@
                         dataSource.value === "local" &&
                         ["gputemp", "gpuload", "gpuvram", "gpupower"].includes(metricType.value);
                     gpuCardSection.style.display = isGpuMetric ? "block" : "none";
+                }
+
+                function toggleNetInterfaceSection() {
+                    netInterfaceSection.style.display =
+                        dataSource.value === "local" &&
+                        ["netdownload", "netupload"].includes(metricType.value)
+                            ? "block"
+                            : "none";
                 }
 
                 function toggleGradientFields() {
@@ -347,6 +393,11 @@
                         if (["gputemp", "gpuload", "gpuvram", "gpupower"].includes(metricType.value)) {
                             if (gpuCard.value) {
                                 settings.gpu_card = gpuCard.value;
+                            }
+                        }
+                        if (["netdownload", "netupload"].includes(metricType.value)) {
+                            if (netInterface.value) {
+                                settings.net_interface = netInterface.value;
                             }
                         }
                     }
@@ -600,6 +651,15 @@
                         <select id="gpu_card" oninput="update();">
                             <option value="card0">card0 (default)</option>
                         </select>
+                    </div>
+
+                    <div id="net_interface_section" class="field" style="display: none">
+                        <label for="net_interface">Network Interface:</label>
+                        <select id="net_interface" oninput="update();">
+                            <option value="all">All interfaces</option>
+                            <option value="physical" selected>Physical interfaces</option>
+                        </select>
+                        <div class="help-text">By default only physical interfaces are shown.</div>
                     </div>
                 </div>
 

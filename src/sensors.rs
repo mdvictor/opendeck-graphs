@@ -1,14 +1,26 @@
 use anyhow::Result;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{LazyLock, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use sysinfo::{Components, Disks, MemoryRefreshKind, Networks, System};
 
 static PREV_CPU_STATS: Mutex<Option<(u64, u64)>> = Mutex::new(None);
 static PREV_DISK_WRITE: Mutex<Option<u64>> = Mutex::new(None);
 static PREV_DISK_READ: Mutex<Option<u64>> = Mutex::new(None);
-static PREV_NET_RX: Mutex<Option<u64>> = Mutex::new(None);
-static PREV_NET_TX: Mutex<Option<u64>> = Mutex::new(None);
+static PREV_NET_RX: LazyLock<Mutex<HashMap<String, NetSample>>> = LazyLock::new(Default::default);
+static PREV_NET_TX: LazyLock<Mutex<HashMap<String, NetSample>>> = LazyLock::new(Default::default);
+/// A previous network counter reading, remembered per button instance
+struct NetSample {
+    selection: String,
+    taken: Instant,
+    total: u64,
+}
+
+/// Readings older than this are discarded so a long gap does not show up as one huge spike
+const NET_SAMPLE_MAX_AGE: Duration = Duration::from_secs(10);
+
 static NVML: OnceLock<Option<nvml_wrapper::Nvml>> = OnceLock::new();
 static SYSINFO: Mutex<Option<System>> = Mutex::new(None);
 
@@ -286,52 +298,101 @@ pub async fn find_disk_read() -> Result<f32> {
     Ok(read_speed)
 }
 
-/// Find network download speed in MB/s
-pub async fn find_net_download() -> Result<f32> {
+/// Network interface selector value meaning "every interface except loopback"
+pub const NET_ALL: &str = "all";
+/// Network interface selector value meaning "physical interfaces"
+pub const NET_PHYSICAL: &str = "physical";
+
+pub struct NetInterfaceInfo {
+    pub name: String,
+    pub physical: bool,
+}
+
+/// An interface is physical when it is backed by a device (virtual ones like
+/// lo, bridges, veth, tun/wg or ifb have no `device` link in sysfs).
+fn is_physical_interface(name: &str) -> bool {
+    Path::new("/sys/class/net").join(name).join("device").exists()
+}
+
+/// List all network interfaces except loopback
+pub fn list_net_interfaces() -> Vec<NetInterfaceInfo> {
+    let mut interfaces: Vec<NetInterfaceInfo> = Networks::new_with_refreshed_list()
+        .iter()
+        .filter(|(name, _)| name.as_str() != "lo")
+        .map(|(name, _)| NetInterfaceInfo {
+            name: name.clone(),
+            physical: is_physical_interface(name),
+        })
+        .collect();
+    interfaces.sort_by(|a, b| a.name.cmp(&b.name));
+    interfaces
+}
+
+/// Sum a counter over the interfaces matching `selection` (None/"physical", "all" or an interface name)
+fn sum_net_counter(selection: Option<&str>, counter: impl Fn(&sysinfo::NetworkData) -> u64) -> u64 {
     let networks = Networks::new_with_refreshed_list();
+    let selection = selection.unwrap_or(NET_PHYSICAL);
 
-    let mut total_rx = 0u64;
-    for (interface_name, network) in &networks {
-        if interface_name == "lo" {
-            continue;
+    networks
+        .iter()
+        .filter(|(name, _)| {
+            let name = name.as_str();
+            if name == "lo" {
+                return false;
+            }
+            match selection {
+                NET_ALL => true,
+                NET_PHYSICAL => is_physical_interface(name),
+                selected => name == selected,
+            }
+        })
+        .map(|(_, data)| counter(data))
+        .sum()
+}
+
+/// Turn a counter total into a MB/s delta, tracking the previous reading per button instance.
+/// A changed selection or a stale reading starts over instead of reporting a bogus delta.
+fn net_speed(
+    prev: &Mutex<HashMap<String, NetSample>>,
+    instance_id: &str,
+    selection: Option<&str>,
+    total: u64,
+) -> f32 {
+    let selection = selection.unwrap_or(NET_PHYSICAL);
+    let now = Instant::now();
+    let mut prev = prev.lock().unwrap();
+
+    let speed = match prev.get(instance_id) {
+        Some(sample)
+            if sample.selection == selection
+                && now.duration_since(sample.taken) <= NET_SAMPLE_MAX_AGE =>
+        {
+            (total.saturating_sub(sample.total) as f32) / 1_048_576.0 // Convert to MB/s
         }
-        total_rx += network.total_received();
-    }
-
-    let mut prev = PREV_NET_RX.lock().unwrap();
-    let download_speed = if let Some(prev_rx) = *prev {
-        let delta = total_rx.saturating_sub(prev_rx);
-        (delta as f32) / 1_048_576.0 // Convert to MB/s
-    } else {
-        0.0
+        _ => 0.0,
     };
 
-    *prev = Some(total_rx);
-    Ok(download_speed)
+    prev.insert(
+        instance_id.to_string(),
+        NetSample {
+            selection: selection.to_string(),
+            taken: now,
+            total,
+        },
+    );
+    speed
+}
+
+/// Find network download speed in MB/s
+pub async fn find_net_download(instance_id: &str, selection: Option<&str>) -> Result<f32> {
+    let total_rx = sum_net_counter(selection, |n| n.total_received());
+    Ok(net_speed(&PREV_NET_RX, instance_id, selection, total_rx))
 }
 
 /// Find network upload speed in MB/s
-pub async fn find_net_upload() -> Result<f32> {
-    let networks = Networks::new_with_refreshed_list();
-
-    let mut total_tx = 0u64;
-    for (interface_name, network) in &networks {
-        if interface_name == "lo" {
-            continue;
-        }
-        total_tx += network.total_transmitted();
-    }
-
-    let mut prev = PREV_NET_TX.lock().unwrap();
-    let upload_speed = if let Some(prev_tx) = *prev {
-        let delta = total_tx.saturating_sub(prev_tx);
-        (delta as f32) / 1_048_576.0 // Convert to MB/s
-    } else {
-        0.0
-    };
-
-    *prev = Some(total_tx);
-    Ok(upload_speed)
+pub async fn find_net_upload(instance_id: &str, selection: Option<&str>) -> Result<f32> {
+    let total_tx = sum_net_counter(selection, |n| n.total_transmitted());
+    Ok(net_speed(&PREV_NET_TX, instance_id, selection, total_tx))
 }
 
 /// Read a hwmon sysfs value as f32, dividing by 1000 (millidegrees → degrees, millivolts → volts)
