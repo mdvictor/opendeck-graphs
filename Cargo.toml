@@ -1,10 +1,10 @@
 [package]
 name = "oa-graphs"
-version = "2.2.0"
+version = "2.5.3"
 edition = "2021"
 
 [dependencies]
-openaction = "2.1"
+openaction = "2.8"
 tokio = { version = "1.45", features = ["full"] }
 tokio-tungstenite = "0.24"
 log = "0.4"
@@ -21,3 +21,15 @@ ab_glyph = "0.2"
 futures-util = "0.3"
 sysinfo = "0.33"
 nvml-wrapper = "0.10"
+
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Performance"] }
+windows = { version = "0.62", features = ["Win32_Graphics_Dxgi_Common","Win32_System_Memory"] }
+dirs = "5"
+winreg = "0.55"
+toml_edit = "0.22"
+tempfile = "3"
+wmi = { version = "0.18", default-features = false }
+
+[target."cfg(windows)".dev-dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Threading","Win32_System_ProcessStatus"] }

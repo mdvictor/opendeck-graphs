@@ -1,0 +1,10 @@
+{
+  "Name": "App Launcher",
+  "UUID": "com.stevengriffin.interstitial.graphs.launcher",
+  "Tooltip": "Open a Windows app",
+  "Icon": "img/icon",
+  "PropertyInspectorPath": "launcher.html",
+  "Controllers": ["Keypad"],
+  "SupportedInMultiActions": false,
+  "States": [{}]
+}
