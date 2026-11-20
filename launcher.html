@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Interstitial Hardware Graphs · App launcher</title><link rel="stylesheet" href="inspector.css"></head>
+<body><h1>App launcher</h1>
+<div class="field"><label for="app">Application</label><select id="app" disabled><option value="">Choose an app</option></select></div>
+<div class="field checkbox-field"><input type="checkbox" id="label" disabled><label for="label">Show app name</label></div>
+<button type="button" class="btn-add" id="all" disabled>Apply label choice to all launcher keys</button><p role="status" id="status"></p>
+<script>
+function connectOpenActionSocket(port,uuid,register,info,actionInfo){
+ const item=JSON.parse(actionInfo), app=document.querySelector("#app"), label=document.querySelector("#label"), all=document.querySelector("#all"), status=document.querySelector("#status");
+ const ws=new WebSocket("ws://localhost:"+port);
+ const send=(event,payload)=>ws.send(JSON.stringify({event,context:item.context,action:item.action,payload}));
+ let settings=item.payload.settings||{};
+ function display(s){settings=s;app.value=s.app_id||"";label.checked=s.show_label===true;}
+ ws.onopen=()=>{ws.send(JSON.stringify({event:register,uuid}));send("sendToPlugin",{event:"launcherReady"});};
+ ws.onmessage=({data})=>{const m=JSON.parse(data),p=m.payload||{};
+  if(m.event==="didReceiveSettings"){display(p.settings||{});return;}
+  if(m.event!=="sendToPropertyInspector")return;
+  if(p.event==="launcherState"){app.replaceChildren(new Option("Choose an app",""),...p.apps.map(a=>new Option(a.label,a.id)));display(p.settings);app.disabled=label.disabled=all.disabled=false;}
+  if(p.event==="launcherLabels"){label.checked=p.show;settings.show_label=p.show;status.textContent=p.show?"App names shown.":"App names hidden.";}
+ };
+ app.onchange=label.onchange=()=>{settings={...settings,app_id:app.value,show_label:label.checked};send("setSettings",settings);};
+ all.onclick=()=>send("sendToPlugin",{event:"applyLabelsToDevice",show:label.checked});
+ ws.onclose=()=>{app.disabled=label.disabled=all.disabled=true;status.textContent="Reconnect the inspector to edit the launcher.";};
+}
+const connectElgatoStreamDeckSocket=connectOpenActionSocket;
+</script></body></html>

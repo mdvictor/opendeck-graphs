@@ -1,8 +1,16 @@
 <!doctype html>
-<html>
+<html lang="en">
     <head>
+        <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Interstitial Hardware Graphs</title>
         <script>
+            function page(id, trigger) {
+                for (const panel of document.querySelectorAll("section.column")) panel.hidden = panel.id !== id;
+                for (const button of document.querySelectorAll("nav button")) button.setAttribute("aria-pressed",String(button === trigger));
+                if (id === "style") refreshAlignment();
+            }
             let update = () => {};
+            let refreshAlignment = () => {};
             function connectOpenActionSocket(
                 inPort,
                 inPropertyInspectorUUID,
@@ -10,6 +18,7 @@
                 inInfo,
                 inActionInfo,
             ) {
+                let currentSettings = {};
                 const websocket = new WebSocket("ws://localhost:" + inPort);
                 inActionInfo = JSON.parse(inActionInfo);
                 websocket.onopen = () => {
@@ -19,6 +28,8 @@
                             uuid: inPropertyInspectorUUID,
                         }),
                     );
+                    websocket.send(JSON.stringify({event:"sendToPlugin",action:inActionInfo.action,context:inActionInfo.context,payload:{event:"inspectorReady"}}));
+                    if (isEncoder) sendAlignment("getStripAlignment");
                 };
 
                 // Functional controls
@@ -27,6 +38,75 @@
                 const websocketSection = document.getElementById("websocket_section");
                 const websocketBanner = document.getElementById("websocket_banner");
                 const metricType = document.getElementById("metric_type");
+                const companion = document.getElementById("companion_metric");
+                companion.append(...Array.from(metricType.options, opt => opt.cloneNode(true)));
+                let isEncoder = inActionInfo.payload.controller === "Encoder";
+                const alignPanel = document.getElementById("strip_alignment");
+                const offset = document.getElementById("strip_offset");
+                const offsetValue = document.getElementById("strip_offset_value");
+                const transparency = document.getElementById("wallpaper_transparency");
+                const transparencyValue=document.getElementById("transparency_value");
+                function refreshTransparency(){
+                    document.getElementById("transparency_field").hidden=alignPanel.hidden || document.getElementById("finish").value!=="glass";
+                    transparencyValue.textContent=transparency.value+"%";
+                }
+                transparency.oninput=()=>{refreshTransparency();update();};
+                document.getElementById("finish").oninput=()=>{refreshTransparency();update();};
+                const alignStatus = document.getElementById("strip_offset_status");
+                const alignButtons = alignPanel.querySelectorAll("button");
+                let alignmentRequest = 0, alignmentTimer = null, savedOffset = null;
+                function showOffset(value) {
+                    offset.value = value;
+                    const pixels = (value > 0 ? "+" : "") + value + " px";
+                    offsetValue.textContent = pixels;
+                    offset.setAttribute("aria-valuetext", pixels);
+                }
+                function sendAlignment(event) {
+                    if (websocket.readyState !== WebSocket.OPEN) return;
+                    const payload = {event, request: alignmentRequest};
+                    if (event === "setStripAlignment") payload.value = Number(offset.value);
+                    websocket.send(JSON.stringify({event:"sendToPlugin", action:inActionInfo.action, context:inActionInfo.context, payload}));
+                }
+                refreshAlignment = () => {
+                    if (isEncoder && alignmentTimer === null) sendAlignment("getStripAlignment");
+                };
+                function flushAlignment() {
+                    clearTimeout(alignmentTimer);
+                    alignmentTimer = null;
+                    sendAlignment("setStripAlignment");
+                }
+                function changeOffset(value, immediate) {
+                    alignmentRequest++;
+                    showOffset(value);
+                    alignStatus.textContent = "";
+                    if (immediate) flushAlignment();
+                    else if (alignmentTimer === null) alignmentTimer = setTimeout(flushAlignment,100);
+                }
+                offset.oninput = () => changeOffset(Number(offset.value),false);
+                offset.onchange = flushAlignment;
+                alignButtons.forEach(button => button.onclick = () => changeOffset(Number(button.dataset.offset),true));
+                function receiveAlignment(payload) {
+                    if (payload.request !== alignmentRequest) return;
+                    alignPanel.hidden = !payload.error && !Number.isInteger(payload.value);
+                    refreshTransparency();
+                    if (payload.error) {
+                        if (savedOffset !== null) showOffset(savedOffset);
+                        alignStatus.textContent = payload.error;
+                    } else if (!alignPanel.hidden) {
+                        savedOffset = payload.value;
+                        showOffset(savedOffset);
+                        alignStatus.textContent = "";
+                    }
+                    offset.disabled = savedOffset === null;
+                    alignButtons.forEach(button => button.disabled = offset.disabled);
+                }
+                websocket.onclose = () => {
+                    clearTimeout(alignmentTimer);
+                    if (alignPanel.hidden) return;
+                    offset.disabled = true;
+                    alignButtons.forEach(button => button.disabled = true);
+                    alignStatus.textContent = "Reconnect the inspector to adjust alignment.";
+                };
                 const fanNumber = document.getElementById("fan_number");
                 const fanNumberSection = document.getElementById("fan_number_section");
                 const vramDisplay = document.getElementById("vram_display");
@@ -72,6 +152,7 @@
                 // Populate controls from current settings
                 const settings = inActionInfo.payload.settings || {};
                 applySettings(settings);
+                selectGpu(settings.gpu_card);
 
                 let savedGpuCard = settings.gpu_card || "";
 
@@ -86,38 +167,49 @@
                         const s = data.payload.settings || {};
                         applySettings(s);
                         savedGpuCard = s.gpu_card || "";
-                        if (gpuCard.options.length > 0) {
-                            gpuCard.value = savedGpuCard;
-                        }
+                        selectGpu(savedGpuCard);
                         renderInitMessages(s.websocket_init_messages || []);
                         refreshDynamicSections();
                     } else if (data.event == "sendToPropertyInspector") {
                         const payload = data.payload || {};
+                        if (payload.event === "stripAlignment") receiveAlignment(payload);
+                        if (payload.event === "frame") {
+                            const preview = document.getElementById("preview");
+                            preview.src = payload.image; preview.hidden = false;
+                            document.getElementById("waiting").hidden = true;
+                            if (isEncoder !== payload.encoder) { isEncoder = payload.encoder; refreshDynamicSections(); }
+                        }
                         if (payload.event === "gpuList") {
                             populateGpuList(payload.gpus || [], savedGpuCard);
+                            refreshAlignment();
                         }
                     }
                 };
 
                 function applySettings(s) {
+                    currentSettings = s;
+                    companion.value = s.companion_metric || "";
                     dataSource.value = s.data_source || "local";
                     if (!dataSource.value) dataSource.value = "local";
                     visualizationType.value = s.visualization_type || "graph";
-                    metricType.value = s.metric_type || "cputemp";
+                    metricType.value = s.metric_type || "cpuload";
                     fanNumber.value = s.fan_number ?? 1;
                     vramDisplay.value = s.vram_display || "percentage";
                     ramDisplay.value = s.ram_display || "percentage";
-                    showValueText.checked = s.show_value_text ?? false;
+                    showValueText.checked = s.show_value_text ?? true;
                     threshold.value = s.threshold ?? "";
-                    normalColor.value = s.normal_color || "#00ff00";
-                    warningColor.value = s.warning_color || "#ff0000";
+                    normalColor.value = s.normal_color || "#34a1d2";
+                    warningColor.value = s.warning_color || "#d8a94e";
                     maxValue.value = s.max_value ?? "";
                     minValue.value = s.min_value ?? "";
                     websocketUrl.value = s.websocket_url || "";
                     websocketApiKey.value = s.websocket_api_key || "";
 
-                    bgColor.value = s.bg_color || "#000000";
-                    bgGradientColor.value = s.bg_gradient_color || "#202020";
+                    document.getElementById("finish").value = s.finish ?? ((s.bg_color || s.bg_gradient_color || (s.bg_gradient && s.bg_gradient !== "none")) ? "solid" : "glass");
+                    transparency.value=s.wallpaper_transparency ?? 100;
+                    refreshTransparency();
+                    bgColor.value = s.bg_color || "#131c26";
+                    bgGradientColor.value = s.bg_gradient_color || "#1e3a52";
                     bgGradient.value = s.bg_gradient || "none";
                     bgBalance.value = s.bg_balance ?? 50;
                     bgSoftness.value = s.bg_softness ?? 50;
@@ -129,26 +221,28 @@
                         titleColor.value = s.title_color;
                     } else {
                         titleColorCustom.checked = false;
-                        titleColor.value = "#00ff00";
+                        titleColor.value = "#34a1d2";
                     }
                     if (typeof s.graph_fill_color === "string" && s.graph_fill_color.length > 0) {
                         fillColorCustom.checked = true;
                         fillColor.value = s.graph_fill_color;
                     } else {
                         fillColorCustom.checked = false;
-                        fillColor.value = "#00ff00";
+                        fillColor.value = "#34a1d2";
                     }
                     valueTextColor.value = s.value_text_color || "#ffffff";
 
                     gaugeOuterRadius.value = s.gauge_outer_radius ?? 55;
-                    gaugeThickness.value = s.gauge_thickness ?? 18;
+                    gaugeThickness.value = s.gauge_thickness ?? 10;
 
-                    titleSize.value = s.title_size ?? 25;
+                    titleSize.value = s.title_size ?? 21;
                     valueTextPosition.value = s.value_text_position || "auto";
                     valueTextSize.value = s.value_text_size ?? "";
                 }
 
                 function refreshDynamicSections() {
+                    document.getElementById("companion_section").hidden = !isEncoder;
+                    document.getElementById("position_field").hidden = isEncoder;
                     toggleDataSourceSections();
                     toggleFanNumberSection();
                     toggleGpuCardSection();
@@ -160,23 +254,13 @@
                 }
 
                 function populateGpuList(gpus, selectedCard) {
-                    gpuCard.innerHTML = "";
-                    if (gpus.length === 0) {
-                        const opt = document.createElement("option");
-                        opt.value = "card0";
-                        opt.textContent = "card0 (default)";
-                        gpuCard.appendChild(opt);
-                    } else {
-                        gpus.forEach((gpu) => {
-                            const opt = document.createElement("option");
-                            opt.value = gpu.card;
-                            opt.textContent = gpu.name;
-                            gpuCard.appendChild(opt);
-                        });
-                    }
-                    if (selectedCard) {
-                        gpuCard.value = selectedCard;
-                    }
+                    gpuCard.replaceChildren(new Option("Automatic · primary adapter", "card0"));
+                    gpus.forEach(gpu => { if (gpu.card !== "card0") gpuCard.add(new Option(gpu.name,gpu.card)); else gpuCard.options[0].textContent = gpu.name; });
+                    selectGpu(selectedCard);
+                }
+                function selectGpu(card) {
+                    if (card && !Array.from(gpuCard.options).some(o => o.value === card)) gpuCard.add(new Option("Saved adapter · unavailable",card));
+                    gpuCard.value = card || "card0";
                 }
 
                 function toggleDataSourceSections() {
@@ -193,21 +277,21 @@
 
                 function toggleFanNumberSection() {
                     fanNumberSection.style.display =
-                        dataSource.value === "local" && metricType.value === "systemfan"
+                        dataSource.value === "local" && [metricType.value,companion.value].includes("systemfan")
                             ? "block"
                             : "none";
                 }
 
                 function toggleVramDisplaySection() {
                     vramDisplaySection.style.display =
-                        dataSource.value === "local" && metricType.value === "gpuvram"
+                        dataSource.value === "local" && [metricType.value,companion.value].includes("gpuvram")
                             ? "block"
                             : "none";
                 }
 
                 function toggleRamDisplaySection() {
                     ramDisplaySection.style.display =
-                        dataSource.value === "local" && metricType.value === "ramusage"
+                        dataSource.value === "local" && [metricType.value,companion.value].includes("ramusage")
                             ? "block"
                             : "none";
                 }
@@ -215,7 +299,7 @@
                 function toggleGpuCardSection() {
                     const isGpuMetric =
                         dataSource.value === "local" &&
-                        ["gputemp", "gpuload", "gpuvram", "gpupower"].includes(metricType.value);
+                        [metricType.value, isEncoder ? companion.value : ""].some(m => ["gputemp","gpuload","gpuvram","gpupower"].includes(m));
                     gpuCardSection.style.display = isGpuMetric ? "block" : "none";
                 }
 
@@ -232,8 +316,10 @@
                 }
 
                 function toggleGaugeSection() {
+                    const paired = isEncoder && dataSource.value === "local" && companion.value && companion.value !== metricType.value;
+                    visualizationType.disabled = Boolean(paired);
                     gaugeSection.style.display =
-                        visualizationType.value === "gauge" ? "block" : "none";
+                        !paired && visualizationType.value === "gauge" ? "block" : "none";
                 }
 
                 function renderInitMessages(messages) {
@@ -253,9 +339,11 @@
                     textarea.className = "init-message-input";
                     textarea.value = value;
                     textarea.placeholder = "Enter init message (JSON)";
-                    textarea.oninput = update;
+                    textarea.setAttribute("aria-label","Initialization message");
+                    textarea.oninput = () => update();
 
                     const removeBtn = document.createElement("button");
+                    removeBtn.setAttribute("aria-label","Remove initialization message");
                     removeBtn.textContent = "−";
                     removeBtn.className = "btn-remove";
                     removeBtn.onclick = () => {
@@ -305,11 +393,16 @@
 
                 update = () => {
                     const settings = {
+                        ...currentSettings,
+                        title_color: undefined, graph_fill_color: undefined, value_text_size: undefined,
+                        threshold: undefined, min_value: undefined, max_value: undefined,
                         data_source: dataSource.value,
                         visualization_type: visualizationType.value,
                         show_value_text: showValueText.checked,
                         normal_color: normalColor.value,
                         warning_color: warningColor.value,
+                        finish: document.getElementById("finish").value,
+                        wallpaper_transparency: Number(transparency.value),
                         bg_color: bgColor.value,
                         bg_gradient: bgGradient.value,
                         bg_gradient_color: bgGradientColor.value,
@@ -317,9 +410,9 @@
                         bg_softness: parseInt(bgSoftness.value, 10) || 0,
                         value_text_color: valueTextColor.value,
                         value_text_position: valueTextPosition.value || "auto",
-                        title_size: parseFloat(titleSize.value) || 25,
+                        title_size: parseFloat(titleSize.value) || 21,
                         gauge_outer_radius: parseFloat(gaugeOuterRadius.value) || 55,
-                        gauge_thickness: parseFloat(gaugeThickness.value) || 18,
+                        gauge_thickness: parseFloat(gaugeThickness.value) || 10,
                     };
 
                     if (valueTextSize.value) {
@@ -335,13 +428,15 @@
 
                     if (dataSource.value === "local") {
                         settings.metric_type = metricType.value;
-                        if (metricType.value === "systemfan" && fanNumber.value) {
+                        settings.companion_metric = companion.value || undefined;
+                        if (gpuCard.value) settings.gpu_card = gpuCard.value;
+                        if ([metricType.value,companion.value].includes("systemfan") && fanNumber.value) {
                             settings.fan_number = parseInt(fanNumber.value);
                         }
-                        if (metricType.value === "gpuvram") {
+                        if ([metricType.value,companion.value].includes("gpuvram")) {
                             settings.vram_display = vramDisplay.value;
                         }
-                        if (metricType.value === "ramusage") {
+                        if ([metricType.value,companion.value].includes("ramusage")) {
                             settings.ram_display = ramDisplay.value;
                         }
                         if (["gputemp", "gpuload", "gpuvram", "gpupower"].includes(metricType.value)) {
@@ -352,8 +447,8 @@
                     }
 
                     if (dataSource.value === "websocket") {
-                        if (websocketUrl.value) settings.websocket_url = websocketUrl.value;
-                        if (websocketApiKey.value) settings.websocket_api_key = websocketApiKey.value;
+                        settings.websocket_url = websocketUrl.value || undefined;
+                        settings.websocket_api_key = websocketApiKey.value || undefined;
 
                         const initMsgs = [];
                         document.querySelectorAll(".init-message-input").forEach((input) => {
@@ -366,6 +461,8 @@
                     if (maxValue.value) settings.max_value = parseFloat(maxValue.value);
                     if (minValue.value) settings.min_value = parseFloat(minValue.value);
 
+                    currentSettings = settings; savedGpuCard = settings.gpu_card || "";
+                    if (websocket.readyState !== WebSocket.OPEN) return;
                     websocket.send(
                         JSON.stringify({
                             event: "setSettings",
@@ -377,168 +474,21 @@
             }
             const connectElgatoStreamDeckSocket = connectOpenActionSocket;
         </script>
-        <style>
-            * {
-                font-family: system-ui, sans-serif;
-                font-size: 14px;
-                color: oklch(92.2% 0 0);
-            }
-            body {
-                margin: 16px;
-                background-color: oklch(20.5% 0 0);
-            }
-            .layout {
-                display: grid;
-                grid-template-columns: 1fr 1fr;
-                gap: 20px;
-                align-items: start;
-            }
-            @media (max-width: 520px) {
-                .layout {
-                    grid-template-columns: 1fr;
-                }
-            }
-            .column-title {
-                font-size: 11px;
-                font-weight: 700;
-                letter-spacing: 0.08em;
-                text-transform: uppercase;
-                color: oklch(70% 0 0);
-                margin: 0 0 12px 0;
-                padding-bottom: 6px;
-                border-bottom: 1px solid oklch(40% 0 0);
-            }
-            .field {
-                margin-bottom: 14px;
-            }
-            label {
-                display: block;
-                margin-bottom: 4px;
-                font-weight: 500;
-            }
-            input[type="text"],
-            input[type="number"],
-            select,
-            textarea {
-                width: 100%;
-                padding: 7px 8px;
-                background-color: oklch(30% 0 0);
-                border: 1px solid oklch(40% 0 0);
-                border-radius: 4px;
-                color: oklch(92.2% 0 0);
-                box-sizing: border-box;
-            }
-            textarea {
-                resize: vertical;
-                min-height: 60px;
-                font-family: monospace;
-            }
-            input[type="checkbox"] {
-                width: 18px;
-                height: 18px;
-                cursor: pointer;
-            }
-            input[type="color"] {
-                width: 100%;
-                height: 34px;
-                padding: 3px;
-                background-color: oklch(30% 0 0);
-                border: 1px solid oklch(40% 0 0);
-                border-radius: 4px;
-                cursor: pointer;
-            }
-            input[type="range"] {
-                width: 100%;
-            }
-            .checkbox-field {
-                display: flex;
-                align-items: center;
-                gap: 8px;
-            }
-            .checkbox-field label {
-                margin: 0;
-            }
-            .section-title {
-                font-size: 13px;
-                font-weight: 600;
-                margin-top: 18px;
-                margin-bottom: 10px;
-                padding-bottom: 4px;
-                border-bottom: 1px solid oklch(35% 0 0);
-                color: oklch(82% 0 0);
-            }
-            .section-title:first-child {
-                margin-top: 0;
-            }
-            .help-text {
-                font-size: 11.5px;
-                color: oklch(65% 0 0);
-                margin-top: 4px;
-            }
-            .init-message-field {
-                display: flex;
-                gap: 8px;
-                margin-bottom: 8px;
-                align-items: flex-start;
-            }
-            .init-message-input {
-                flex: 1;
-            }
-            .btn-remove,
-            .btn-add {
-                padding: 8px 12px;
-                background-color: oklch(35% 0 0);
-                border: 1px solid oklch(45% 0 0);
-                border-radius: 4px;
-                cursor: pointer;
-                color: oklch(92.2% 0 0);
-                font-weight: bold;
-            }
-            .btn-remove {
-                width: 32px;
-                height: 32px;
-                padding: 0;
-            }
-            .btn-add {
-                width: 100%;
-                margin-top: 8px;
-            }
-            .btn-remove:hover,
-            .btn-add:hover {
-                background-color: oklch(40% 0 0);
-            }
-            .banner {
-                display: none;
-                align-items: flex-start;
-                gap: 8px;
-                padding: 10px 12px;
-                border-radius: 6px;
-                margin-bottom: 14px;
-                font-size: 13px;
-                line-height: 1.4;
-            }
-            .banner-warning {
-                background-color: oklch(35% 0.08 60);
-                border: 1px solid oklch(55% 0.12 60);
-                color: oklch(90% 0.05 60);
-            }
-            .banner-icon {
-                font-size: 16px;
-                flex-shrink: 0;
-                line-height: 1.4;
-            }
-        </style>
+        <link rel="stylesheet" href="inspector.css">
     </head>
     <body>
+        <header><div class="identity"><span class="signal" aria-hidden="true">∿</span><h1>Interstitial Hardware Graphs</h1></div>
+          <figure aria-label="Live instrument preview"><span id="waiting">Waiting for a reading</span><img id="preview" alt="Live instrument" hidden></figure>
+        </header>
+        <nav aria-label="Settings"><button type="button" aria-pressed="true" onclick="page('source',this)">Monitor</button><button type="button" aria-pressed="false" onclick="page('style',this)">Appearance</button></nav>
         <div class="layout">
             <!-- LEFT COLUMN: data + behavior -->
-            <div class="column">
-                <h2 class="column-title">Data &amp; Behavior</h2>
+            <section class="column" id="source"><h2>Signal</h2>
 
                 <div class="field">
-                    <label for="data_source">Data Source:</label>
+                    <label for="data_source">Data Source</label>
                     <select id="data_source" onchange="dataSourceChanged();">
-                        <option value="local">Local Sensors</option>
+                        <option value="local">Local sensors</option>
                         <option value="websocket">WebSocket</option>
                     </select>
                 </div>
@@ -551,7 +501,7 @@
                 <!-- Local Sensors Section -->
                 <div id="local_section">
                     <div class="field">
-                        <label for="metric_type">Metric Type:</label>
+                        <label for="metric_type">Metric Type</label>
                         <select id="metric_type" oninput="metricTypeChanged();">
                             <option value="cputemp">CPU Temperature</option>
                             <option value="cpupackagetemp">CPU Package Temperature</option>
@@ -573,14 +523,15 @@
                         </select>
                     </div>
 
+                    <div id="companion_section" class="field" hidden><label for="companion_metric">Second reading</label><select id="companion_metric" onchange="metricTypeChanged()"><option value="">None</option></select><div class="help-text">Pair two histories in this strip section. Each keeps its own scale.</div></div>
                     <div id="fan_number_section" class="field" style="display: none">
-                        <label for="fan_number">Fan Number:</label>
+                        <label for="fan_number">Fan Number</label>
                         <input type="number" id="fan_number" min="1" max="20" value="1" oninput="update();" />
                         <div class="help-text">fan1, fan2, etc.</div>
                     </div>
 
                     <div id="vram_display_section" class="field" style="display: none">
-                        <label for="vram_display">VRAM Display:</label>
+                        <label for="vram_display">VRAM Display</label>
                         <select id="vram_display" oninput="update();">
                             <option value="percentage">Percentage (%)</option>
                             <option value="gigabytes">Gigabytes (GB)</option>
@@ -588,7 +539,7 @@
                     </div>
 
                     <div id="ram_display_section" class="field" style="display: none">
-                        <label for="ram_display">RAM Display:</label>
+                        <label for="ram_display">RAM Display</label>
                         <select id="ram_display" oninput="update();">
                             <option value="percentage">Percentage (%)</option>
                             <option value="gigabytes">Gigabytes (GB)</option>
@@ -596,9 +547,9 @@
                     </div>
 
                     <div id="gpu_card_section" class="field" style="display: none">
-                        <label for="gpu_card">GPU:</label>
+                        <label for="gpu_card">GPU</label>
                         <select id="gpu_card" oninput="update();">
-                            <option value="card0">card0 (default)</option>
+                            <option value="card0">Automatic · primary adapter</option>
                         </select>
                     </div>
                 </div>
@@ -606,15 +557,15 @@
                 <!-- WebSocket Section -->
                 <div id="websocket_section" style="display: none">
                     <div class="field">
-                        <label for="websocket_url">WebSocket URL:</label>
+                        <label for="websocket_url">WebSocket URL</label>
                         <input type="text" id="websocket_url" placeholder="ws://localhost:8080" oninput="update();" />
                     </div>
                     <div class="field">
-                        <label for="websocket_api_key">API Key (Optional):</label>
-                        <input type="text" id="websocket_api_key" placeholder="Enter API key" oninput="update();" />
+                        <label for="websocket_api_key">API Key (Optional)</label>
+                        <input type="password" autocomplete="off" id="websocket_api_key" placeholder="Enter API key" oninput="update();" />
                     </div>
                     <div class="field">
-                        <label>Init Messages:</label>
+                        <label>Init Messages</label>
                         <div id="init_messages_container"></div>
                         <button class="btn-add" onclick="addInitMessage()">+ Add Message</button>
                     </div>
@@ -622,45 +573,53 @@
 
                 <div class="section-title">Scale</div>
                 <div class="field">
-                    <label for="threshold">Warning Threshold:</label>
+                    <label for="threshold">Warning Threshold</label>
                     <input type="number" id="threshold" placeholder="Auto (e.g., 80 for CPU temp)" step="0.1" oninput="update();" />
-                    <div class="help-text">Graph turns warning color when value exceeds threshold.</div>
+                    <div class="help-text">The trace changes color above this value.</div>
                 </div>
                 <div class="field">
-                    <label for="min_value">Min Value:</label>
+                    <label for="min_value">Min Value</label>
                     <input type="number" id="min_value" placeholder="Auto (0)" step="0.1" oninput="update();" />
                 </div>
                 <div class="field">
-                    <label for="max_value">Max Value:</label>
+                    <label for="max_value">Max Value</label>
                     <input type="number" id="max_value" placeholder="Auto (based on metric type)" step="0.1" oninput="update();" />
                 </div>
-            </div>
+            </section>
 
             <!-- RIGHT COLUMN: appearance -->
-            <div class="column">
-                <h2 class="column-title">Appearance</h2>
+            <section class="column" id="style" hidden><h2>Instrument</h2>
 
                 <div class="section-title">Display</div>
                 <div class="field">
-                    <label for="visualization_type">Visualization Type:</label>
+                    <label for="visualization_type">Visualization Type</label>
                     <select id="visualization_type" oninput="visualizationChanged();">
                         <option value="graph">Graph</option>
                         <option value="gauge">Gauge</option>
                     </select>
                 </div>
 
+                <fieldset id="strip_alignment" hidden>
+                    <legend>Strip alignment</legend>
+                    <div class="offset-heading"><label for="strip_offset">Vertical offset</label><output id="strip_offset_value" for="strip_offset"></output></div>
+                    <input id="strip_offset" type="range" min="-30" max="30" step="1" aria-describedby="strip_offset_help">
+                    <div class="offset-actions"><button type="button" data-offset="0">Original · 0 px</button><button type="button" data-offset="14">Offset · +14 px</button></div>
+                    <p id="strip_offset_help">Moves all four instruments together. Positive values move them down.</p>
+                    <p id="strip_offset_status" role="status"></p>
+                </fieldset>
+
                 <div class="section-title">Title</div>
                 <div class="field">
-                    <label for="title_size">Title Size (px):</label>
-                    <input type="number" id="title_size" min="8" max="50" step="1" value="25" oninput="update();" />
+                    <label for="title_size">Title Size (px)</label>
+                    <input type="number" id="title_size" min="8" max="50" step="1" value="21" oninput="update();" />
                 </div>
                 <div class="field checkbox-field">
                     <input id="title_color_custom" type="checkbox" oninput="titleColorCustomChanged();" />
                     <label for="title_color_custom">Custom Title Color</label>
                 </div>
                 <div id="title_color_field" class="field" style="display: none">
-                    <label for="title_color">Title Color:</label>
-                    <input type="color" id="title_color" value="#00ff00" oninput="update();" />
+                    <label for="title_color">Title Color</label>
+                    <input type="color" id="title_color" value="#34a1d2" oninput="update();" />
                     <div class="help-text">Otherwise follows normal/warning state color.</div>
                 </div>
 
@@ -669,8 +628,8 @@
                     <input id="show_value_text" type="checkbox" oninput="update();" />
                     <label for="show_value_text">Show Current Value</label>
                 </div>
-                <div class="field">
-                    <label for="value_text_position">Position:</label>
+                <div class="field" id="position_field">
+                    <label for="value_text_position">Position</label>
                     <select id="value_text_position" oninput="update();">
                         <option value="auto">Auto (bottom for graph, center for gauge)</option>
                         <option value="top">Top</option>
@@ -679,55 +638,67 @@
                     </select>
                 </div>
                 <div class="field">
-                    <label for="value_text_size">Size (px):</label>
+                    <label for="value_text_size">Size (px)</label>
                     <input type="number" id="value_text_size" min="8" max="50" step="1" placeholder="Auto (22 graph / 26 gauge)" oninput="update();" />
                 </div>
                 <div class="field">
-                    <label for="value_text_color">Color:</label>
+                    <label for="value_text_color">Color</label>
                     <input type="color" id="value_text_color" value="#ffffff" oninput="update();" />
                 </div>
 
                 <div class="section-title">Colors</div>
                 <div class="field">
-                    <label for="normal_color">Normal Color:</label>
-                    <input type="color" id="normal_color" value="#00ff00" oninput="update();" />
+                    <label for="normal_color">Normal Color</label>
+                    <input type="color" id="normal_color" value="#34a1d2" oninput="update();" />
                     <div class="help-text">Line / arc color when below threshold.</div>
                 </div>
                 <div class="field">
-                    <label for="warning_color">Warning Color:</label>
-                    <input type="color" id="warning_color" value="#ff0000" oninput="update();" />
+                    <label for="warning_color">Warning Color</label>
+                    <input type="color" id="warning_color" value="#d8a94e" oninput="update();" />
                 </div>
                 <div class="field checkbox-field">
                     <input id="fill_color_custom" type="checkbox" oninput="fillColorCustomChanged();" />
                     <label for="fill_color_custom">Custom Graph Fill Color</label>
                 </div>
                 <div id="fill_color_field" class="field" style="display: none">
-                    <label for="fill_color">Graph Fill Color:</label>
-                    <input type="color" id="fill_color" value="#00ff00" oninput="update();" />
+                    <label for="fill_color">Graph Fill Color</label>
+                    <input type="color" id="fill_color" value="#34a1d2" oninput="update();" />
                     <div class="help-text">Overrides the area-under-line color in graph mode.</div>
                 </div>
 
                 <div id="gauge_section" style="display: none">
                     <div class="section-title">Gauge Geometry</div>
                     <div class="field">
-                        <label for="gauge_outer_radius">Outer Radius (px):</label>
+                        <label for="gauge_outer_radius">Outer Radius (px)</label>
                         <input type="number" id="gauge_outer_radius" min="20" max="70" step="1" value="55" oninput="update();" />
                         <div class="help-text">Larger = arc closer to the edge (max 70).</div>
                     </div>
                     <div class="field">
-                        <label for="gauge_thickness">Arc Thickness (px):</label>
-                        <input type="number" id="gauge_thickness" min="2" max="40" step="1" value="18" oninput="update();" />
+                        <label for="gauge_thickness">Arc Thickness (px)</label>
+                        <input type="number" id="gauge_thickness" min="2" max="40" step="1" value="10" oninput="update();" />
                         <div class="help-text">Smaller = thinner ring, leaves room for centered value text.</div>
                     </div>
                 </div>
 
                 <div class="section-title">Background</div>
                 <div class="field">
-                    <label for="bg_color">Background Color:</label>
-                    <input type="color" id="bg_color" value="#000000" oninput="update();" />
+                    <label for="finish">Finish</label>
+                    <select id="finish" oninput="update();">
+                        <option value="glass">Glass</option>
+                        <option value="solid">Solid</option>
+                    </select>
+                </div>
+                <div class="field" id="transparency_field" hidden>
+                    <label for="wallpaper_transparency">Background transparency <output id="transparency_value" for="wallpaper_transparency">100%</output></label>
+                    <input type="range" id="wallpaper_transparency" min="0" max="100" step="1" value="100">
+                    <div class="help-text">At 100% the artwork shows through the glass. At 0% the background color fills this instrument.</div>
                 </div>
                 <div class="field">
-                    <label for="bg_gradient">Gradient:</label>
+                    <label for="bg_color">Background Color</label>
+                    <input type="color" id="bg_color" value="#131c26" oninput="update();" />
+                </div>
+                <div class="field">
+                    <label for="bg_gradient">Gradient</label>
                     <select id="bg_gradient" oninput="bgGradientChanged();">
                         <option value="none">None</option>
                         <option value="linear">Linear (vertical)</option>
@@ -736,8 +707,8 @@
                 </div>
                 <div id="gradient_fields_section" style="display: none">
                     <div class="field">
-                        <label for="bg_gradient_color">Gradient Second Color:</label>
-                        <input type="color" id="bg_gradient_color" value="#202020" oninput="update();" />
+                        <label for="bg_gradient_color">Gradient Second Color</label>
+                        <input type="color" id="bg_gradient_color" value="#1e3a52" oninput="update();" />
                     </div>
                     <div class="field">
                         <label for="bg_balance">Balance: <span id="bg_balance_value"></span></label>
@@ -750,7 +721,7 @@
                                oninput="document.getElementById('bg_softness_value').textContent = this.value; update();" />
                     </div>
                 </div>
-            </div>
+            </section>
         </div>
     </body>
 </html>

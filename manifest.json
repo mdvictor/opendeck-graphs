@@ -1,18 +1,24 @@
 {
-  "Name": "Hardware Graphs",
-  "Author": "Victor Marin",
-  "Version": "2.2.0",
+  "Name": "Interstitial Hardware Graphs",
+  "Author": "Interstitial contributors, based on Hardware Graphs by Victor Marin",
+  "PluginUUID": "com.stevengriffin.interstitial.graphs",
+  "Version": "2.5.3",
   "CodePaths": {
     "x86_64-unknown-linux-gnu": "oa-graphs-x86_64-unknown-linux-gnu",
-    "aarch64-unknown-linux-gnu": "oa-graphs-aarch64-unknown-linux-gnu"
+    "aarch64-unknown-linux-gnu": "oa-graphs-aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc": "oa-graphs.exe"
   },
   "CodePathLin": "oa-graphs-x86_64-unknown-linux-gnu",
   "OS": [
     {
       "Platform": "linux"
+    },
+    {
+      "Platform": "windows",
+      "MinimumVersion": "10"
     }
   ],
-  "Category": "Graphs",
+  "Category": "Interstitial Hardware Graphs",
   "Description": "Display hardware metrics as timeseries graphs on your Stream Deck",
   "Icon": "img/icon",
   "PropertyInspectorPath": "pi.html",
@@ -20,11 +26,20 @@
     {
       "Icon": "img/icon",
       "Name": "Hardware Graph",
-      "UUID": "com.victormarin.graphs.action",
+      "UUID": "com.stevengriffin.interstitial.graphs.action",
       "Tooltip": "Display hardware metrics as a graph",
       "States": [
         {}
-      ]
+      ],
+      "Controllers": [
+        "Keypad",
+        "Encoder"
+      ],
+      "Encoder": {
+        "layout": "strip.json",
+        "Icon": "img/icon"
+      }
     }
-  ]
+  ],
+  "CodePathWin": "oa-graphs.exe"
 }

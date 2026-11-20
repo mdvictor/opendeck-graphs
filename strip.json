@@ -1,0 +1,15 @@
+{
+  "id": "com.victormarin.graphs.strip",
+  "items": [
+    {
+      "key": "plot",
+      "type": "pixmap",
+      "rect": [
+        0,
+        0,
+        200,
+        100
+      ]
+    }
+  ]
+}

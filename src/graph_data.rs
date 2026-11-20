@@ -75,11 +75,12 @@ impl From<ValueTextPos> for ValuePos {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum MetricType {
     CpuTemp,
     CpuPackageTemp,
+    #[default]
     CpuLoad,
     GpuTemp,
     GpuLoad,
@@ -97,12 +98,6 @@ pub enum MetricType {
     NetUpload,
 }
 
-impl Default for MetricType {
-    fn default() -> Self {
-        MetricType::CpuTemp
-    }
-}
-
 impl MetricType {
     pub fn default_max(&self) -> f32 {
         match self {
@@ -112,7 +107,10 @@ impl MetricType {
             | MetricType::MotherboardTemp
             | MetricType::NvmeTemp
             | MetricType::RamTemp => 120.0,
-            MetricType::CpuLoad | MetricType::GpuLoad | MetricType::GpuVram | MetricType::RamUsage => 100.0,
+            MetricType::CpuLoad
+            | MetricType::GpuLoad
+            | MetricType::GpuVram
+            | MetricType::RamUsage => 100.0,
             MetricType::GpuPower => 500.0,
             MetricType::SystemFan => 3000.0,
             MetricType::CpuVoltage => 2.0,
@@ -124,7 +122,10 @@ impl MetricType {
     pub fn default_threshold(&self) -> Option<f32> {
         match self {
             MetricType::CpuTemp | MetricType::CpuPackageTemp => Some(80.0),
-            MetricType::CpuLoad | MetricType::GpuLoad | MetricType::GpuVram | MetricType::RamUsage => Some(80.0),
+            MetricType::CpuLoad
+            | MetricType::GpuLoad
+            | MetricType::GpuVram
+            | MetricType::RamUsage => Some(80.0),
             MetricType::GpuPower => Some(300.0),
             MetricType::GpuTemp => Some(85.0),
             MetricType::MotherboardTemp => Some(60.0),
@@ -164,7 +165,10 @@ impl MetricType {
             | MetricType::MotherboardTemp
             | MetricType::NvmeTemp
             | MetricType::RamTemp => "°C",
-            MetricType::CpuLoad | MetricType::GpuLoad | MetricType::GpuVram | MetricType::RamUsage => "%",
+            MetricType::CpuLoad
+            | MetricType::GpuLoad
+            | MetricType::GpuVram
+            | MetricType::RamUsage => "%",
             MetricType::GpuPower => "W",
             MetricType::SystemFan => " RPM",
             MetricType::CpuVoltage => "V",
@@ -172,6 +176,17 @@ impl MetricType {
             MetricType::NetDownload | MetricType::NetUpload => " MB/s",
         }
     }
+}
+
+fn show_value_default() -> bool {
+    true
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Finish {
+    Glass,
+    Solid,
 }
 
 /// Settings for the graph action
@@ -183,6 +198,7 @@ pub struct GraphSettings {
 
     // LM Sensors settings
     pub metric_type: MetricType,
+    pub companion_metric: Option<MetricType>,
 
     // WebSocket settings
     pub websocket_url: Option<String>,
@@ -191,6 +207,7 @@ pub struct GraphSettings {
 
     // Display settings
     pub visualization_type: VisualizationType,
+    #[serde(default = "show_value_default")]
     pub show_value_text: bool,
     pub threshold: Option<f32>,
     pub normal_color: String,
@@ -209,6 +226,8 @@ pub struct GraphSettings {
     pub ram_display: MemoryDisplay,
 
     // Background customization
+    pub finish: Option<Finish>,
+    pub wallpaper_transparency: Option<u8>,
     pub bg_color: Option<String>,
     pub bg_gradient_color: Option<String>,
     pub bg_gradient: BgGradient,
@@ -255,6 +274,9 @@ pub struct GraphData {
     data_points: VecDeque<f32>,
     pub settings: GraphSettings,
     ws_client: Option<Arc<WebSocketClient>>,
+    pub inspector_open: bool,
+    pub encoder_page: u8,
+    pub companion: Option<Box<GraphData>>,
     /// Cached total memory in GB (auto-detected, used for graph max and display)
     pub vram_total_gb: Option<f32>,
     pub ram_total_gb: Option<f32>,
@@ -266,9 +288,34 @@ impl GraphData {
             data_points: VecDeque::with_capacity(MAX_DATA_POINTS),
             settings,
             ws_client: None,
+            inspector_open: false,
+            encoder_page: 0,
+            companion: None,
             vram_total_gb: None,
             ram_total_gb: None,
         }
+    }
+
+    pub fn clear_history(&mut self) {
+        self.data_points.clear();
+    }
+
+    pub fn sync_companion(&mut self, encoder: bool) {
+        self.encoder_page = 0;
+        let metric = self.settings.companion_metric.filter(|m| {
+            encoder
+                && self.settings.data_source == DataSource::Local
+                && *m != self.settings.metric_type
+        });
+        self.companion = metric.map(|m| {
+            let mut settings = self.settings.clone();
+            settings.metric_type = m;
+            settings.companion_metric = None;
+            settings.threshold = None;
+            settings.min_value = None;
+            settings.max_value = None;
+            Box::new(GraphData::new(settings))
+        });
     }
 
     pub fn add_data_point(&mut self, value: f32) {
@@ -278,38 +325,59 @@ impl GraphData {
         self.data_points.push_back(value);
     }
 
+    fn instrument_title(&self) -> String {
+        use MetricType::*;
+        let settings = &self.settings;
+        if settings.data_source == DataSource::WebSocket {
+            return "WebSocket".into();
+        }
+        match (settings.metric_type, settings.memory_display()) {
+            (NetUpload, _) => "Net 🡩".into(),
+            (NetDownload, _) => "Net 🡫".into(),
+            (SystemFan, _) => format!("Fan {}", settings.fan_number.unwrap_or(1)),
+            (GpuVram, MemoryDisplay::Gigabytes) => "VRAM GB".into(),
+            (RamUsage, MemoryDisplay::Gigabytes) => "RAM GB".into(),
+            (metric, _) => metric.display_name().into(),
+        }
+    }
+
+    fn memory_total(&self) -> Option<f32> {
+        match self.settings.metric_type {
+            MetricType::GpuVram => self.vram_total_gb,
+            MetricType::RamUsage => self.ram_total_gb,
+            _ => None,
+        }
+    }
+
+    fn default_scale(&self) -> (f32, Option<f32>) {
+        if self.settings.data_source == DataSource::WebSocket {
+            return (100.0, None);
+        }
+        let metric = self.settings.metric_type;
+        let threshold = metric.default_threshold();
+        if self.settings.memory_display() != MemoryDisplay::Gigabytes {
+            return (metric.default_max(), threshold);
+        }
+        let total = self.memory_total();
+        (
+            total.unwrap_or(metric.default_max()),
+            total.zip(threshold).map(|(size, pct)| pct / 100.0 * size),
+        )
+    }
+
     pub fn get_graph_config(&self) -> GraphConfig {
         let normal_color = parse_hex_color(&self.settings.normal_color)
             .unwrap_or(ColorScheme::default().normal_color);
         let warning_color = parse_hex_color(&self.settings.warning_color)
             .unwrap_or(ColorScheme::default().warning_color);
 
-        // Title is always the metric name only (displayed on the graph image)
-        let title = match self.settings.data_source {
-            DataSource::Local => {
-                // For system fan, show the fan number
-                if matches!(self.settings.metric_type, MetricType::SystemFan) {
-                    if let Some(fan_num) = self.settings.fan_number {
-                        format!("Fan {}", fan_num)
-                    } else {
-                        "Fan 1".to_string()
-                    }
-                } else if matches!(self.settings.metric_type, MetricType::GpuVram | MetricType::RamUsage)
-                    && self.settings.memory_display() == MemoryDisplay::Gigabytes
-                {
-                    match self.settings.metric_type {
-                        MetricType::GpuVram => "VRAM GB".to_string(),
-                        MetricType::RamUsage => "RAM GB".to_string(),
-                        _ => unreachable!(),
-                    }
-                } else {
-                    self.settings.metric_type.display_name().to_string()
-                }
-            }
-            DataSource::WebSocket => "WebSocket".to_string(),
-        };
-
+        let title = self.instrument_title();
         let background = BackgroundConfig {
+            glass: self.settings.finish.map(|f| f == Finish::Glass).unwrap_or(
+                self.settings.bg_color.is_none()
+                    && self.settings.bg_gradient_color.is_none()
+                    && self.settings.bg_gradient == BgGradient::None,
+            ),
             color1: self
                 .settings
                 .bg_color
@@ -344,61 +412,31 @@ impl GraphData {
             .and_then(parse_hex_color)
             .unwrap_or(image::Rgba([255, 255, 255, 255]));
 
+        let (maximum, threshold) = self.default_scale();
         GraphConfig {
             data_points: self.data_points.iter().copied().collect(),
-            max_value: self
-                .settings
-                .max_value
-                .unwrap_or_else(|| match self.settings.data_source {
-                    DataSource::Local => {
-                        let detected_total = match self.settings.metric_type {
-                            MetricType::GpuVram if self.settings.memory_display() == MemoryDisplay::Gigabytes => self.vram_total_gb,
-                            MetricType::RamUsage if self.settings.memory_display() == MemoryDisplay::Gigabytes => self.ram_total_gb,
-                            _ => None,
-                        };
-                        detected_total.unwrap_or_else(|| self.settings.metric_type.default_max())
-                    }
-                    DataSource::WebSocket => 100.0,
-                }),
+            max_value: self.settings.max_value.unwrap_or(maximum),
             min_value: self.settings.min_value.unwrap_or(0.0),
-            threshold: self
-                .settings
-                .threshold
-                .or_else(|| match self.settings.data_source {
-                    DataSource::Local => {
-                        let default = self.settings.metric_type.default_threshold();
-                        // In GB mode, scale the percentage-based threshold to GB
-                        match self.settings.metric_type {
-                            MetricType::GpuVram if self.settings.memory_display() == MemoryDisplay::Gigabytes => {
-                                self.vram_total_gb.and_then(|total| default.map(|d| d / 100.0 * total))
-                            }
-                            MetricType::RamUsage if self.settings.memory_display() == MemoryDisplay::Gigabytes => {
-                                self.ram_total_gb.and_then(|total| default.map(|d| d / 100.0 * total))
-                            }
-                            _ => default,
-                        }
-                    }
-                    DataSource::WebSocket => None,
-                }),
+            threshold: self.settings.threshold.or(threshold),
             color_scheme: ColorScheme {
                 normal_color,
                 warning_color,
             },
             title,
             background,
+            transparency: self.settings.wallpaper_transparency.unwrap_or(100).min(100),
             title_color,
             fill_color,
             value_text_color,
             value_text: self.formatted_value_text(),
             value_text_position: self.settings.value_text_position.into(),
-            value_text_size: self.settings.value_text_size.unwrap_or_else(|| {
-                // Preserve historical defaults: 22 for graph (bottom), 26 for gauge (center).
+            value_text_size: self.settings.value_text_size.unwrap_or(
                 match self.settings.visualization_type {
                     VisualizationType::Gauge => 26.0,
                     VisualizationType::Graph => 22.0,
-                }
-            }),
-            title_size: self.settings.title_size.unwrap_or(25.0),
+                },
+            ),
+            title_size: self.settings.title_size.unwrap_or(21.0),
             gauge_outer_radius: self
                 .settings
                 .gauge_outer_radius
@@ -417,11 +455,7 @@ impl GraphData {
         }
         let value = *self.data_points.back()?;
         if self.settings.memory_display() == MemoryDisplay::Gigabytes {
-            let total = match self.settings.metric_type {
-                MetricType::GpuVram => self.vram_total_gb,
-                MetricType::RamUsage => self.ram_total_gb,
-                _ => None,
-            };
+            let total = self.memory_total();
             if let Some(total) = total {
                 return Some(format!("{:.1}/{:.0}GB", value, total));
             }
@@ -435,6 +469,7 @@ impl GraphData {
     }
 
     pub async fn initialize_websocket(&mut self) -> Result<()> {
+        self.ws_client = None;
         if self.settings.data_source == DataSource::WebSocket {
             if let Some(url) = &self.settings.websocket_url {
                 let config = WebSocketConfig {
@@ -444,7 +479,7 @@ impl GraphData {
                 };
 
                 let client = Arc::new(WebSocketClient::new(config));
-                client.start().await?;
+
                 self.ws_client = Some(client);
             }
         }
@@ -460,7 +495,7 @@ impl GraphData {
 /// Parse hex color string to RGBA
 fn parse_hex_color(hex: &str) -> Option<image::Rgba<u8>> {
     let hex = hex.trim_start_matches('#');
-    if hex.len() != 6 {
+    if hex.len() != 6 || !hex.is_ascii() {
         return None;
     }
 

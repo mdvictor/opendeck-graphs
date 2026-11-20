@@ -17,56 +17,38 @@ pub struct WebSocketConfig {
 
 /// WebSocket data source client
 pub struct WebSocketClient {
-    config: WebSocketConfig,
-    current_value: Arc<Mutex<f32>>,
+    task: tokio::task::JoinHandle<()>,
+    current_value: Arc<Mutex<Option<f32>>>,
 }
 
 impl WebSocketClient {
     pub fn new(config: WebSocketConfig) -> Self {
-        Self {
-            config,
-            current_value: Arc::new(Mutex::new(0.0)),
-        }
-    }
-
-    /// Start the WebSocket connection and data fetching loop
-    pub async fn start(&self) -> Result<()> {
-        let config = self.config.clone();
-        let current_value = self.current_value.clone();
-
-        tokio::spawn(async move {
-            if let Err(e) = Self::run_connection(config, current_value).await {
-                log::error!("WebSocket connection error: {}", e);
+        let current_value = Arc::new(Mutex::new(None));
+        let shared = current_value.clone();
+        let task = tokio::spawn(async move {
+            loop {
+                if let Err(error) = Self::connect_and_run(&config, &shared).await {
+                    log::warn!("WebSocket source disconnected: {error}");
+                }
+                *shared.lock().await = None;
+                tokio::time::sleep(Duration::from_secs(5)).await;
             }
         });
-
-        Ok(())
-    }
-
-    /// Get the current value
-    pub async fn get_value(&self) -> f32 {
-        *self.current_value.lock().await
-    }
-
-    async fn run_connection(config: WebSocketConfig, current_value: Arc<Mutex<f32>>) -> Result<()> {
-        loop {
-            match Self::connect_and_run(&config, &current_value).await {
-                Ok(_) => {
-                    log::info!("WebSocket connection closed, reconnecting in 5 seconds...");
-                }
-                Err(e) => {
-                    log::error!("WebSocket error: {}, reconnecting in 5 seconds...", e);
-                }
-            }
-            tokio::time::sleep(Duration::from_secs(5)).await;
+        Self {
+            task,
+            current_value,
         }
+    }
+
+    pub async fn get_value(&self) -> Option<f32> {
+        *self.current_value.lock().await
     }
 
     async fn connect_and_run(
         config: &WebSocketConfig,
-        current_value: &Arc<Mutex<f32>>,
+        current_value: &Arc<Mutex<Option<f32>>>,
     ) -> Result<()> {
-        log::info!("Connecting to WebSocket: {}", config.url);
+        log::debug!("Connecting to telemetry source");
 
         // Build request with Authorization header if API key is provided
         let ws_stream = if let Some(api_key) = &config.api_key {
@@ -107,8 +89,7 @@ impl WebSocketClient {
         log::info!("WebSocket connected, sending initialization messages");
 
         // Send initialization messages and wait for responses
-        for (idx, init_msg) in config.init_messages.iter().enumerate() {
-            log::debug!("Sending init message {}: {}", idx + 1, init_msg);
+        for init_msg in &config.init_messages {
             write
                 .lock()
                 .await
@@ -118,9 +99,7 @@ impl WebSocketClient {
             // Wait for response
             if let Some(response) = read.next().await {
                 match response {
-                    Ok(Message::Text(text)) => {
-                        log::debug!("Init response {}: {}", idx + 1, text);
-                    }
+                    Ok(Message::Text(_)) => {}
                     Ok(Message::Close(_)) => {
                         return Err(anyhow!("WebSocket closed during initialization"));
                     }
@@ -137,12 +116,11 @@ impl WebSocketClient {
         while let Some(message) = read.next().await {
             match message {
                 Ok(Message::Text(text)) => {
-                    log::debug!("Received message: {}", text);
                     // Try to parse as JSON and extract numeric value
                     if let Ok(json) = serde_json::from_str::<Value>(&text) {
                         if let Some(value) = Self::extract_value(&json) {
                             let mut current = current_value.lock().await;
-                            *current = value;
+                            *current = value.is_finite().then_some(value);
                             log::debug!("Updated value to: {}", value);
                         }
                     }
@@ -186,9 +164,15 @@ impl WebSocketClient {
             }
             Value::Array(arr) => {
                 // Try first element
-                arr.first().and_then(|v| Self::extract_value(v))
+                arr.first().and_then(Self::extract_value)
             }
             _ => None,
         }
+    }
+}
+
+impl Drop for WebSocketClient {
+    fn drop(&mut self) {
+        self.task.abort();
     }
 }
